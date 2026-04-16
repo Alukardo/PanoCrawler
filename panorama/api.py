@@ -1,5 +1,5 @@
 from io import BytesIO
-from typing import Dict, Tuple, Union
+from typing import Dict, Tuple, Union, Optional
 
 import requests
 from PIL import Image
@@ -12,14 +12,14 @@ class Location(BaseModel):
 
 
 class MetaData(BaseModel):
-    date: str
+    date: Optional[str]  # API may return null
     location: Location
     pano_id: str
 
 
 def get_panorama_meta(pano_id: str, api_key: str) -> MetaData:
     """
-    Returns a panorama's metadata.
+    Returns a panorama's metadata by pano_id.
 
     Quota: This function doesn't use up any quota or charge on your API_KEY.
 
@@ -30,8 +30,12 @@ def get_panorama_meta(pano_id: str, api_key: str) -> MetaData:
         "https://maps.googleapis.com/maps/api/streetview/metadata"
         f"?pano={pano_id}&key={api_key}"
     )
-    resp = requests.get(url)
-    return MetaData(**resp.json())
+    resp = requests.get(url, timeout=15)
+    resp.raise_for_status()
+    data = resp.json()
+    if data.get("status") != "OK":
+        raise ValueError(f"API error: {data.get('status')} — {data.get('error_message', '')}")
+    return MetaData(**data)
 
 
 def get_location_meta(location: Tuple[float, float], api_key: str) -> MetaData:
@@ -51,8 +55,12 @@ def get_location_meta(location: Tuple[float, float], api_key: str) -> MetaData:
         "https://maps.googleapis.com/maps/api/streetview/metadata"
         f"?location={location[0]},{location[1]}&key={api_key}"
     )
-    resp = requests.get(url)
-    return MetaData(**resp.json())
+    resp = requests.get(url, timeout=15)
+    resp.raise_for_status()
+    data = resp.json()
+    if data.get("status") != "OK":
+        raise ValueError(f"API error: {data.get('status')} — {data.get('error_message', '')}")
+    return MetaData(**data)
 
 
 def get_streetview(
@@ -65,7 +73,7 @@ def get_streetview(
     pitch: int = 0,
 ) -> Image.Image:
     """
-    Get an image using the official API. These are not panorama.
+    Get a non-panorama image using the official API.
 
     You can find instructions to obtain an API key here:
     https://developers.google.com/maps/documentation/streetview/
@@ -82,7 +90,6 @@ def get_streetview(
         fov: Image field-of-view.
         pitch: Image pitch.
     """
-
     url = "https://maps.googleapis.com/maps/api/streetview"
     params: Dict[str, Union[str, int]] = {
         "size": "%dx%d" % (width, height),
@@ -93,6 +100,7 @@ def get_streetview(
         "key": api_key,
     }
 
-    response = requests.get(url, params=params, stream=True)
+    response = requests.get(url, params=params, stream=True, timeout=15)
+    response.raise_for_status()
     img = Image.open(BytesIO(response.content))
     return img

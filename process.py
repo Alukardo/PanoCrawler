@@ -1,80 +1,99 @@
 import csv
 import itertools
+import logging
 import os
 import shutil
 from pathlib import Path
-from typing import TextIO
+from typing import List
 
-source_pre_path = "../images/pano/"
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+log = logging.getLogger(__name__)
 
-inputs_pre_path = "../temp/train_A/"
-output_pre_path = "../temp/train_B/"
-lables_pre_path = "../temp/train_cond/"
-featur_pre_path = "../temp/train_feat/"
+# ── Paths ─────────────────────────────────────────────────────────────────────
+SOURCE_DIR = Path(__file__).parent.parent / "images" / "pano"
+OUT_DIR = Path(__file__).parent.parent / "temp"
+INPUT_DIR = OUT_DIR / "train_A"
+OUTPUT_DIR = OUT_DIR / "train_B"
+LABEL_DIR = OUT_DIR / "train_cond"
+FEATURE_DIR = OUT_DIR / "train_feat"
+
+# 距离阈值：小于此值视为同位置（单位：度²）
+DISTANCE_THRESHOLD = 0.00000001  # ≈ 1.1m at equator
 
 
-def clean(dic: str) -> None:
+def clean(dic: Path) -> None:
+    """Remove all files in a directory without removing the directory itself."""
+    if not dic.exists():
+        return
     for file_name in os.listdir(dic):
-        file_path = os.path.join(dic, file_name)
-        if os.path.isfile(file_path):
-            os.remove(file_path)
+        file_path = dic / file_name
+        if file_path.is_file():
+            file_path.unlink()
 
 
-def process_data(filename: str) -> None:
-    data = []
+def process_data(filename: Path) -> int:
+    """
+    Generate paired training samples from panorama info CSV.
+
+    Only pairs with the same location (distance < DISTANCE_THRESHOLD) are kept.
+    Each valid pair produces two samples (A→B and B→A).
+
+    Returns:
+        Number of training pairs generated.
+    """
+    data: List[dict] = []
 
     with open(filename, encoding="utf-8") as csvfile:
         csv_reader = csv.DictReader(csvfile)
         for row in csv_reader:
             data.append(row)
 
-    results = list(itertools.combinations(data, 2))
+    pairs = list(itertools.combinations(data, 2))
+    count = 0
 
-    i = 0
+    for a, b in pairs:
+        d_lat = float(a["lat"]) - float(b["lat"])
+        d_lon = float(a["lon"]) - float(b["lon"])
 
-    for re in results:
-        d_lat = float(re[0]["lat"]) - float(re[1]["lat"])
-        d_lon = float(re[0]["lon"]) - float(re[1]["lon"])
+        if d_lat * d_lat + d_lon * d_lon >= DISTANCE_THRESHOLD:
+            continue
 
-        distance = d_lat * d_lat + d_lon * d_lon
+        source = SOURCE_DIR / f"{a['pano_id']}.png"
+        target = SOURCE_DIR / f"{b['pano_id']}.png"
 
-        if distance < 0.00000001:
-            source_path = source_pre_path + re[0]["pano_id"] + ".png"
-            target_path = source_pre_path + re[1]["pano_id"] + ".png"
+        # Skip if either source file is missing
+        if not source.exists():
+            log.warning("Source file not found, skipping pair: %s", source.name)
+            continue
+        if not target.exists():
+            log.warning("Target file not found, skipping pair: %s", target.name)
+            continue
 
-            inputs_path = inputs_pre_path + "int" + f"{i:05d}" + ".png"
-            output_path = output_pre_path + "out" + f"{i:05d}" + ".png"
-            lables_path = lables_pre_path + "ins" + f"{i:05d}" + ".txt"
+        # Forward pair: a → b
+        (INPUT_DIR / f"int{count:05d}.png").write_bytes(source.read_bytes())
+        (OUTPUT_DIR / f"out{count:05d}.png").write_bytes(target.read_bytes())
+        (LABEL_DIR / f"ins{count:05d}.txt").write_text(f"{d_lat:.16f}\n{d_lon:.16f}\n")
+        count += 1
 
-            shutil.copyfile(source_path, inputs_path)
-            shutil.copyfile(target_path, output_path)
+        # Reverse pair: b → a
+        (INPUT_DIR / f"int{count:05d}.png").write_bytes(target.read_bytes())
+        (OUTPUT_DIR / f"out{count:05d}.png").write_bytes(source.read_bytes())
+        (LABEL_DIR / f"ins{count:05d}.txt").write_text(f"{-d_lat:.16f}\n{-d_lon:.16f}\n")
+        count += 1
 
-            with open(lables_path, "w") as lables_file:
-                lables_file.write(f"{d_lat:.16f}\n")
-                lables_file.write(f"{d_lon:.16f}\n")
-
-            i = i + 1
-
-            inputs_path = inputs_pre_path + "int" + f"{i:05d}" + ".png"
-            output_path = output_pre_path + "out" + f"{i:05d}" + ".png"
-            lables_path = lables_pre_path + "ins" + f"{i:05d}" + ".txt"
-
-            shutil.copyfile(source_path, output_path)
-            shutil.copyfile(target_path, inputs_path)
-
-            with open(lables_path, "w") as lables_file:
-                lables_file.write(f"{-d_lat:.16f}\n")
-                lables_file.write(f"{-d_lon:.16f}\n")
-
-            i = i + 1
-    print("Pairs of Data: " + str(i))
+    return count
 
 
 if __name__ == "__main__":
-    clean(inputs_pre_path)
-    clean(output_pre_path)
-    clean(lables_pre_path)
-    clean(featur_pre_path)
+    # Ensure output directories exist
+    for d in [INPUT_DIR, OUTPUT_DIR, LABEL_DIR, FEATURE_DIR]:
+        d.mkdir(parents=True, exist_ok=True)
 
-    filename = "../images/pano/info.csv"
-    process_data(filename)
+    clean(INPUT_DIR)
+    clean(OUTPUT_DIR)
+    clean(LABEL_DIR)
+    clean(FEATURE_DIR)
+
+    filename = Path(__file__).parent.parent / "images" / "pano" / "info.csv"
+    pairs = process_data(filename)
+    log.info("Training pairs generated: %d", pairs)
