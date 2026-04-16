@@ -1,11 +1,12 @@
-import os
 import csv
 import logging
+import random
+import time
 from pathlib import Path
 
 from dotenv import load_dotenv
 from panorama import search_panoramas
-from panorama import get_panorama, PanoDownloadError
+from panorama import get_panorama, PanoDownloadError, _get_session
 
 load_dotenv(Path(__file__).parent / ".env")
 
@@ -13,7 +14,9 @@ load_dotenv(Path(__file__).parent / ".env")
 panoPath = Path(__file__).parent.parent / "images" / "pano"
 infoPath = panoPath / "info.csv"
 
-# 搜索坐标列表：(纬度, 经度)
+# 每个全景下载后随机等待 3~8 秒，防止触发 Google 频率限制
+MIN_DELAY, MAX_DELAY = 3.0, 8.0
+
 locList = [
     (25.045711097729114, 121.51134055812804),
 ]
@@ -43,6 +46,8 @@ def init_info() -> None:
 
 def fetch_panoramas(loc: tuple[float, float], isCurrent: bool) -> None:
     lat, lon = loc
+    session = _get_session()
+
     log.info("Searching near (%.6f, %.6f)...", lat, lon)
     panos = search_panoramas(lat=lat, lon=lon)
     log.info("Found %d panorama(s)", len(panos))
@@ -53,14 +58,15 @@ def fetch_panoramas(loc: tuple[float, float], isCurrent: bool) -> None:
 
     with open(infoPath, "a", encoding="utf-8", newline="") as f:
         writer = csv.writer(f)
-        for pano in panos:
-            # isCurrent=True  → date 为空（当前最新）
+        for i, pano in enumerate(panos):
+            # isCurrent=True  → date 为空（当前最新全景）
             # isCurrent=False → date 非空（历史数据）
             if isCurrent and pano.date is not None:
                 continue
             if not isCurrent and pano.date is None:
                 continue
-            row = [
+
+            writer.writerow([
                 pano.pano_id,
                 pano.lat,
                 pano.lon,
@@ -68,24 +74,27 @@ def fetch_panoramas(loc: tuple[float, float], isCurrent: bool) -> None:
                 pano.pitch,
                 pano.roll,
                 pano.date,
-            ]
-            writer.writerow(row)
+            ])
             log.info(
-                "  pano_id=%s  lat=%.6f  lon=%.6f  date=%s",
-                pano.pano_id, pano.lat, pano.lon, pano.date,
+                "  [%d/%d] pano_id=%s  lat=%.6f  lon=%.6f  date=%s",
+                i + 1, len(panos), pano.pano_id, pano.lat, pano.lon, pano.date,
             )
 
-            # 下载全景图（避免重复下载）
             img_path = panoPath / f"{pano.pano_id}.png"
             if img_path.exists():
-                log.info("  Already exists, skipping: %s", img_path.name)
+                log.info("  Already exists, skipping.")
             else:
                 try:
-                    image = get_panorama(pano=pano, zoom=3)
+                    image = get_panorama(pano=pano, zoom=3, session=session)
                     image.save(img_path, "png")
                     log.info("  Saved: %s", img_path.name)
                 except PanoDownloadError as e:
                     log.warning("  [%s] skipped: %s", pano.pano_id, e)
+
+            # 节流：每个全景之间随机等待，避免频率限制
+            if i < len(panos) - 1:
+                delay = random.uniform(MIN_DELAY, MAX_DELAY)
+                time.sleep(delay)
 
 
 # ── 入口 ─────────────────────────────────────────────────────────────────────

@@ -1,19 +1,70 @@
 import itertools
+import logging
 import time
+import random
 from dataclasses import dataclass
 from datetime import datetime
 from io import BytesIO
 from typing import Generator, Tuple
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from PIL import Image
 
 from .search import Panorama
 
-# Panorama date threshold: differentiate old vs new format
+log = logging.getLogger(__name__)
+
+# ── Constants ────────────────────────────────────────────────────────────────
+
 DATE_THRESHOLD = datetime.strptime("2017-09", "%Y-%m")
 OUTPUT_SIZE = (1024, 512)
 
+# Tile server politely identifies itself
+TILE_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Referer": "https://maps.google.com/",
+}
+
+
+# ── Shared session ────────────────────────────────────────────────────────────
+
+_session: requests.Session | None = None
+
+
+def _get_session() -> requests.Session:
+    """
+    Returns a re-useable session with connection pooling and retry logic.
+    Automatically backs off on 403 / 429 / timeouts.
+    """
+    global _session
+    if _session is None:
+        _session = requests.Session()
+        _session.headers.update(TILE_HEADERS)
+
+        retry_strategy = Retry(
+            total=3,
+            backoff_factor=1.0,          # 1s, 2s, 4s  (urllib3 backoff)
+            status_forcelist={403, 429, 500, 502, 503, 504},
+            allowed_methods=["GET"],
+            raise_on_status=False,
+        )
+        adapter = HTTPAdapter(
+            max_retries=retry_strategy,
+            pool_connections=8,
+            pool_maxsize=16,
+        )
+        _session.mount("https://cbk0.google.com", adapter)
+        _session.mount("https://", adapter)
+    return _session
+
+
+# ── Dataclasses ──────────────────────────────────────────────────────────────
 
 @dataclass
 class TileInfo:
@@ -29,45 +80,52 @@ class Tile:
     image: Image.Image
 
 
+# ── Tile helpers ─────────────────────────────────────────────────────────────
+
 def get_width_and_height_from_zoom(zoom: int) -> Tuple[int, int]:
-    """
-    Returns the width and height of a panorama at a given zoom level, depends on the
-    zoom level.
-    """
     return 2**zoom, 2 ** (zoom - 1)
 
 
 def make_download_url(pano_id: str, zoom: int, x: int, y: int) -> str:
-    """
-    Returns the URL to download a tile.
-    """
     return (
         "https://cbk0.google.com/cbk"
         f"?output=tile&panoid={pano_id}&zoom={zoom}&x={x}&y={y}"
     )
 
 
-def fetch_panorama_tile(tile_info: TileInfo) -> Image.Image:
+def fetch_panorama_tile(tile_info: TileInfo, session: requests.Session) -> Image.Image:
     """
-    Downloads a single tile. Retries once on connection error, then propagates.
+    Downloads a single tile using the shared session.
+    Retries once with exponential backoff on transient errors.
+    Raises on hard failures (403 without Retry-After, etc.).
     """
-    max_retries = 2
-    for attempt in range(max_retries):
+    max_attempts = 3
+    for attempt in range(max_attempts):
         try:
-            response = requests.get(tile_info.fileurl, stream=True, timeout=15)
-            response.raise_for_status()
-            return Image.open(BytesIO(response.content))
+            resp = session.get(tile_info.fileurl, stream=True, timeout=20)
+            if resp.status_code == 403:
+                # Hard block – no point retrying immediately
+                raise PanoDownloadError(
+                    f"403 Forbidden for {tile_info.fileurl}, "
+                    "pano may not exist or is unavailable."
+                )
+            if resp.status_code == 429:
+                # Rate-limited – wait and retry
+                wait = int(resp.headers.get("Retry-After", 5))
+                log.warning("429 rate-limited, waiting %ds before retry.", wait)
+                time.sleep(wait)
+                continue
+            resp.raise_for_status()
+            return Image.open(BytesIO(resp.content))
         except requests.RequestException:
-            if attempt < max_retries - 1:
-                time.sleep(0.5)
+            if attempt < max_attempts - 1:
+                # Exponential backoff: 1s, 2s
+                time.sleep(1.0 * (2 ** attempt) + random.uniform(0, 0.5))
             else:
-                raise  # let caller decide how to handle
+                raise  # let caller handle
 
 
 def iter_tile_info(pano_id: str, zoom: int) -> Generator[TileInfo, None, None]:
-    """
-    Generate a list of a panorama's tiles and their position.
-    """
     width, height = get_width_and_height_from_zoom(zoom)
     for x, y in itertools.product(range(width), range(height)):
         yield TileInfo(
@@ -77,21 +135,30 @@ def iter_tile_info(pano_id: str, zoom: int) -> Generator[TileInfo, None, None]:
         )
 
 
-def iter_tiles(pano_id: str, zoom: int) -> Generator[Tile, None, None]:
+def iter_tiles(pano_id: str, zoom: int, session: requests.Session) -> Generator[Tile, None, None]:
     for info in iter_tile_info(pano_id, zoom):
-        image = fetch_panorama_tile(info)
+        image = fetch_panorama_tile(info, session)
         yield Tile(x=info.x, y=info.y, image=image)
 
+
+# ── Exceptions ───────────────────────────────────────────────────────────────
 
 class PanoDownloadError(Exception):
     """Raised when a panorama tile fails to download."""
     pass
 
 
-def get_panorama(pano: Panorama, zoom: int = 5) -> Image.Image:
+# ── Main download function ───────────────────────────────────────────────────
+
+def get_panorama(pano: Panorama, zoom: int = 5, session: requests.Session | None = None) -> Image.Image:
     """
-    Downloads and stitches a panorama. Raises PanoDownloadError on failure.
+    Downloads and stitches a panorama.
+    Uses a shared session for connection reuse and polite rate-limiting.
+    Raises PanoDownloadError on hard failure.
     """
+    if session is None:
+        session = _get_session()
+
     scale_width, scale_height = get_width_and_height_from_zoom(zoom)
 
     time_state = True
@@ -106,11 +173,12 @@ def get_panorama(pano: Panorama, zoom: int = 5) -> Image.Image:
 
     panorama = Image.new("RGB", (total_width, total_height))
     try:
-        for tile in iter_tiles(pano_id=pano.pano_id, zoom=zoom):
+        for tile in iter_tiles(pano_id=pano.pano_id, zoom=zoom, session=session):
             panorama.paste(im=tile.image, box=(tile.x * pano.tile[1], tile.y * pano.tile[0]))
             del tile
     except Exception as e:
         raise PanoDownloadError(f"Tile download failed for pano {pano.pano_id}: {e}") from e
+
     panorama = panorama.crop((0, 0, real_height, real_width))
     panorama = panorama.resize((total_width, total_height))
     clip_x = int(pano.heading / 360.0 * total_width)
