@@ -92,13 +92,11 @@ def extract_panoramas(text: str) -> List[Panorama]:
     else:
         raw_dates = subset[8]
 
-    # For some reason, dates do not include a date for each panorama.
-    # the n dates match the last n panos. Here we flip the arrays
-    # so that the 0th pano aligns with the 0th date.
-    raw_panos = raw_panos[::-1]
-    raw_dates = raw_dates[::-1]
-
-    dates = [f"{d[1][0]}-{d[1][1]:02d}" for d in raw_dates]
+    # Build date lookup by pano_id (robust — order/slice doesn't matter)
+    date_map = {
+        raw_panos[d[0]][0][1]: f"{d[1][0]}-{d[1][1]:02d}"
+        for d in raw_dates
+    }
 
     return [
         Panorama(
@@ -108,12 +106,11 @@ def extract_panoramas(text: str) -> List[Panorama]:
             heading=pano[2][2][0],
             pitch=pano[2][2][1] if len(pano[2][2]) >= 2 else None,
             roll=pano[2][2][2] if len(pano[2][2]) >= 3 else None,
-            date=dates[i] if i < len(dates) else None,
+            date=date_map.get(pano[0][1]),
             scale=scale,
             tile=tile_size
-
         )
-        for i, pano in enumerate(raw_panos)
+        for pano in raw_panos
     ]
 
 
