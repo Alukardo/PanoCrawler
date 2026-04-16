@@ -12,11 +12,11 @@ class Panorama(BaseModel):
     lat: float
     lon: float
     heading: float
-    pitch: Optional[float]
-    roll: Optional[float]
-    date: Optional[str]
-    scale: Optional[list]
-    tile: Optional[list]
+    pitch: Optional[float] = None
+    roll: Optional[float] = None
+    date: Optional[str] = None
+    scale: Optional[list] = None
+    tile: Optional[list] = None
 
 
     def print(self):
