@@ -30,16 +30,16 @@ class Panorama(BaseModel):
 
 
     def saveFile(self, file):
-        ps = (self.pano_id
-              + ',' + str(self.lat)
-              + ',' + str(self.lon)
-              + ',' + str(self.heading)
-              + ',' + str(self.pitch)
-              + ',' + str(self.roll)
-              + ',' + str(self.date)
-              )
-        file.writelines(ps)
-        file.writelines('\n')
+        """Write panorama data to a file handle or csv.writer."""
+        row = [self.pano_id, self.lat, self.lon, self.heading,
+               self.pitch, self.roll, self.date]
+        try:
+            file.writerow(row)
+        except AttributeError:
+            # fallback: plain file handle
+            ps = ','.join(str(v) for v in row) + '\n'
+            file.writelines(ps)
+
 
 
 def make_search_url(lat: float, lon: float) -> str:
@@ -73,7 +73,7 @@ def extract_panoramas(text: str) -> List[Panorama]:
     panoids.
     """
 
-    # The response is actually javascript code. It's a function with a single
+    # The response is actually JavaScript code. It's a function with a single
     # input which is a huge deeply nested array of items.
     blob = re.findall(r"callbackfunc\( (.*) \)$", text)[0]
     data = json.loads(blob)

@@ -128,3 +128,22 @@ class TestPanoramaModel:
         assert "25.0" in content
         assert "121.5" in content
         assert "2022-03" in content
+
+    def test_save_file_csv_writer(self):
+        """saveFile must also work with csv.writer (main.py use case)."""
+        import io
+        import csv
+        p = Panorama(
+            pano_id="csv_test",
+            lat=35.0,
+            lon=139.0,
+            heading=90.0,
+        )
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        p.saveFile(writer)
+        content = buf.getvalue()
+        assert "csv_test" in content
+        assert "35.0" in content
+        assert "139.0" in content
+
