@@ -1,59 +1,87 @@
 import os
+import csv
+import logging
 from pathlib import Path
 
 from dotenv import load_dotenv
+from panorama import search_panoramas
+from panorama import get_panorama
 
 load_dotenv(Path(__file__).parent / ".env")
 
-from panorama import search_panoramas
-from panorama import get_location_meta
-from panorama import get_streetview
-from panorama import get_panorama
-from panorama import get_panorama_meta
-from process import clean
-import csv
+# ── 配置 ──────────────────────────────────────────────────────────────────────
+panoPath = Path(__file__).parent.parent / "images" / "pano"
+infoPath = panoPath / "info.csv"
 
-GoogleAPIKey = os.environ.get("GOOGLE_API_KEY", "")
-panoId = "z80QZ1_QgCbYwj7RrmlS0Q"
-panoPath = "../images/pano/"
-infoPath = os.path.join(panoPath, "info.csv")
+# 搜索坐标列表：(纬度, 经度)
+locList = [
+    (25.045711097729114, 121.51134055812804),
+]
 
-loc0 = {"lat": 25.017331619756757, "lon": 121.53579493917834}
-loc1 = {"lat": 41.898220819756757, "lon": 12.47648043917834}
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%H:%M:%S",
+)
+log = logging.getLogger(__name__)
 
-loc01 = {"lat": 25.038147776102537, "lon": 121.56977877482196}
-loc02 = {"lat": 25.014466835352888, "lon": 121.54363900896685}
 
-locList = [(25.045711097729114, 121.51134055812804)]
-
+# ── 初始化 info.csv（仅在文件不存在时写入表头）───────────────────────────────
 
 def init_info() -> None:
-    clean(panoPath)
-    with open(infoPath, "a", encoding="utf-8", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(["pano_id", "lat", "lon", "heading", "pitch", "roll", "date"])
+    panoPath.mkdir(parents=True, exist_ok=True)
+    if not infoPath.exists():
+        with open(infoPath, "a", encoding="utf-8", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["pano_id", "lat", "lon", "heading", "pitch", "roll", "date"])
+        log.info("Created %s", infoPath)
+    else:
+        log.info("info.csv exists, appending data only")
 
 
-def print_pano(loc: tuple[float, float], isCurrent: bool) -> None:
-    panos = search_panoramas(lat=loc[0], lon=loc[1])
-    print(f"#Panos Count: {len(panos)}")
+# ── 搜索并下载全景图 ─────────────────────────────────────────────────────────
+
+def fetch_panoramas(loc: tuple[float, float]) -> None:
+    lat, lon = loc
+    log.info("Searching near (%.6f, %.6f)...", lat, lon)
+    panos = search_panoramas(lat=lat, lon=lon)
+    log.info("Found %d panorama(s)", len(panos))
+
+    if not panos:
+        log.warning("No panoramas found for the given location.")
+        return
+
     with open(infoPath, "a", encoding="utf-8", newline="") as f:
         writer = csv.writer(f)
         for pano in panos:
-            if isCurrent and pano.date is not None:
-                continue
-            if not isCurrent and pano.date is None:
-                continue
-            print("##########################################")
-            pano.print()
-            pano.saveFile(writer)
-            image = get_panorama(pano=pano, zoom=3)
-            image.save(os.path.join(panoPath, f"{pano.pano_id}.png"), "png")
-            print(f"panoImg : {panoPath}{pano.pano_id}.png")
-            print("------------------------------------------")
+            row = [
+                pano.pano_id,
+                pano.lat,
+                pano.lon,
+                pano.heading,
+                pano.pitch,
+                pano.roll,
+                pano.date,
+            ]
+            writer.writerow(row)
+            log.info(
+                "  pano_id=%s  lat=%.6f  lon=%.6f  date=%s",
+                pano.pano_id, pano.lat, pano.lon, pano.date,
+            )
 
+            # 下载全景图（避免重复下载）
+            img_path = panoPath / f"{pano.pano_id}.png"
+            if img_path.exists():
+                log.info("  Already exists, skipping: %s", img_path.name)
+            else:
+                image = get_panorama(pano=pano, zoom=3)
+                image.save(img_path, "png")
+                log.info("  Saved: %s", img_path.name)
+
+
+# ── 入口 ─────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     init_info()
     for location in locList:
-        print_pano(location, isCurrent=False)
+        fetch_panoramas(location)
