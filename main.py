@@ -5,7 +5,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from panorama import search_panoramas
-from panorama import get_panorama
+from panorama import get_panorama, PanoDownloadError
 
 load_dotenv(Path(__file__).parent / ".env")
 
@@ -41,7 +41,7 @@ def init_info() -> None:
 
 # ── 搜索并下载全景图 ─────────────────────────────────────────────────────────
 
-def fetch_panoramas(loc: tuple[float, float]) -> None:
+def fetch_panoramas(loc: tuple[float, float], isCurrent: bool) -> None:
     lat, lon = loc
     log.info("Searching near (%.6f, %.6f)...", lat, lon)
     panos = search_panoramas(lat=lat, lon=lon)
@@ -54,6 +54,12 @@ def fetch_panoramas(loc: tuple[float, float]) -> None:
     with open(infoPath, "a", encoding="utf-8", newline="") as f:
         writer = csv.writer(f)
         for pano in panos:
+            # isCurrent=True  → date 为空（当前最新）
+            # isCurrent=False → date 非空（历史数据）
+            if isCurrent and pano.date is not None:
+                continue
+            if not isCurrent and pano.date is None:
+                continue
             row = [
                 pano.pano_id,
                 pano.lat,
@@ -74,9 +80,12 @@ def fetch_panoramas(loc: tuple[float, float]) -> None:
             if img_path.exists():
                 log.info("  Already exists, skipping: %s", img_path.name)
             else:
-                image = get_panorama(pano=pano, zoom=3)
-                image.save(img_path, "png")
-                log.info("  Saved: %s", img_path.name)
+                try:
+                    image = get_panorama(pano=pano, zoom=3)
+                    image.save(img_path, "png")
+                    log.info("  Saved: %s", img_path.name)
+                except PanoDownloadError as e:
+                    log.warning("  [%s] skipped: %s", pano.pano_id, e)
 
 
 # ── 入口 ─────────────────────────────────────────────────────────────────────
@@ -84,4 +93,4 @@ def fetch_panoramas(loc: tuple[float, float]) -> None:
 if __name__ == "__main__":
     init_info()
     for location in locList:
-        fetch_panoramas(location)
+        fetch_panoramas(location, isCurrent=False)

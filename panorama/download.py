@@ -49,20 +49,19 @@ def make_download_url(pano_id: str, zoom: int, x: int, y: int) -> str:
 
 def fetch_panorama_tile(tile_info: TileInfo) -> Image.Image:
     """
-    Tries to download a tile, returns a PIL Image. Retries on connection error.
+    Downloads a single tile. Retries once on connection error, then propagates.
     """
-    max_retries = 5
+    max_retries = 2
     for attempt in range(max_retries):
         try:
-            response = requests.get(tile_info.fileurl, stream=True, timeout=10)
+            response = requests.get(tile_info.fileurl, stream=True, timeout=15)
             response.raise_for_status()
             return Image.open(BytesIO(response.content))
         except requests.RequestException:
             if attempt < max_retries - 1:
-                print(f"Connection error (attempt {attempt + 1}/{max_retries}). Retrying in 1 seconds.")
-                time.sleep(1)
+                time.sleep(0.5)
             else:
-                raise
+                raise  # let caller decide how to handle
 
 
 def iter_tile_info(pano_id: str, zoom: int) -> Generator[TileInfo, None, None]:
@@ -84,9 +83,14 @@ def iter_tiles(pano_id: str, zoom: int) -> Generator[Tile, None, None]:
         yield Tile(x=info.x, y=info.y, image=image)
 
 
+class PanoDownloadError(Exception):
+    """Raised when a panorama tile fails to download."""
+    pass
+
+
 def get_panorama(pano: Panorama, zoom: int = 5) -> Image.Image:
     """
-    Downloads and stitches a panorama.
+    Downloads and stitches a panorama. Raises PanoDownloadError on failure.
     """
     scale_width, scale_height = get_width_and_height_from_zoom(zoom)
 
@@ -101,9 +105,12 @@ def get_panorama(pano: Panorama, zoom: int = 5) -> Image.Image:
     total_height = pano.scale[zoom][0][0]
 
     panorama = Image.new("RGB", (total_width, total_height))
-    for tile in iter_tiles(pano_id=pano.pano_id, zoom=zoom):
-        panorama.paste(im=tile.image, box=(tile.x * pano.tile[1], tile.y * pano.tile[0]))
-        del tile
+    try:
+        for tile in iter_tiles(pano_id=pano.pano_id, zoom=zoom):
+            panorama.paste(im=tile.image, box=(tile.x * pano.tile[1], tile.y * pano.tile[0]))
+            del tile
+    except Exception as e:
+        raise PanoDownloadError(f"Tile download failed for pano {pano.pano_id}: {e}") from e
     panorama = panorama.crop((0, 0, real_height, real_width))
     panorama = panorama.resize((total_width, total_height))
     clip_x = int(pano.heading / 360.0 * total_width)
