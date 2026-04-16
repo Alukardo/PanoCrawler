@@ -4,9 +4,7 @@ Converts Euler angles to rotation matrices for 3D transformations.
 """
 
 import math
-
 import numpy as np
-
 
 def eulerAnglesToRotationMatrix(theta):
     """

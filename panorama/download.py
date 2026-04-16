@@ -37,7 +37,7 @@ TILE_HEADERS = {
 _session: requests.Session | None = None
 
 
-def _get_session() -> requests.Session:
+def get_session() -> requests.Session:
     """
     Returns a re-useable session with connection pooling and retry logic.
     Automatically backs off on 403 / 429 / timeouts.
@@ -157,7 +157,7 @@ def get_panorama(pano: Panorama, zoom: int = 5, session: requests.Session | None
     Raises PanoDownloadError on hard failure.
     """
     if session is None:
-        session = _get_session()
+        session = get_session()
 
     scale_width, scale_height = get_width_and_height_from_zoom(zoom)
 

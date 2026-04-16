@@ -6,7 +6,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from panorama import search_panoramas
-from panorama import get_panorama, PanoDownloadError, _get_session
+from panorama import get_panorama, PanoDownloadError, get_session
 
 load_dotenv(Path(__file__).parent / ".env")
 
@@ -46,7 +46,7 @@ def init_info() -> None:
 
 def fetch_panoramas(loc: tuple[float, float], isCurrent: bool) -> None:
     lat, lon = loc
-    session = _get_session()
+    session = get_session()
 
     log.info("Searching near (%.6f, %.6f)...", lat, lon)
     panos = search_panoramas(lat=lat, lon=lon)
