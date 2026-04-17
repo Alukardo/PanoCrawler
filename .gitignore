@@ -9,5 +9,5 @@ build/
 *.zip
 images/
 temp/
-*.egg-info/
 .env
+.venv/

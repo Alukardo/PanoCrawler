@@ -1,8 +1,14 @@
+"""
+Panorama Data Processing — generates paired training samples for GAN-style models.
+
+Each valid geo-location pair produces two directional samples:
+  A→B  and  B→A  (reverse direction, negated offsets).
+"""
+
 import csv
 import itertools
 import logging
 import os
-import shutil
 from pathlib import Path
 from typing import List
 
@@ -15,10 +21,12 @@ OUT_DIR = Path(__file__).parent.parent / "temp"
 INPUT_DIR = OUT_DIR / "train_A"
 OUTPUT_DIR = OUT_DIR / "train_B"
 LABEL_DIR = OUT_DIR / "train_cond"
-FEATURE_DIR = OUT_DIR / "train_feat"
 
 # 距离阈值：小于此值视为同位置（单位：度²）
-DISTANCE_THRESHOLD = 0.00000001  # ≈ 1.1m at equator
+# 0.00000001 ≈ 1.1m at equator
+# NOTE: 此阈值较严格。Google 全景 GPS 存在误差，同一地点两次拍摄
+#       可能略超此值而导致配对失败。如配对数量过少，可适当放宽。
+DISTANCE_THRESHOLD = 0.00000001
 
 
 def clean(dic: Path) -> None:
@@ -86,14 +94,14 @@ def process_data(filename: Path) -> int:
 
 if __name__ == "__main__":
     # Ensure output directories exist
-    for d in [INPUT_DIR, OUTPUT_DIR, LABEL_DIR, FEATURE_DIR]:
+    for d in [INPUT_DIR, OUTPUT_DIR, LABEL_DIR]:
         d.mkdir(parents=True, exist_ok=True)
 
     clean(INPUT_DIR)
     clean(OUTPUT_DIR)
     clean(LABEL_DIR)
-    clean(FEATURE_DIR)
 
     filename = Path(__file__).parent.parent / "images" / "pano" / "info.csv"
     pairs = process_data(filename)
     log.info("Training pairs generated: %d", pairs)
+    log.info("Output: %s", INPUT_DIR.parent)

@@ -3,6 +3,7 @@ import logging
 import random
 import time
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 from dotenv import load_dotenv
 from panorama import search_panoramas
@@ -28,18 +29,46 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
+FIELDNAMES = ["pano_id", "lat", "lon", "heading", "pitch", "roll", "date"]
+
 
 # ── 初始化 info.csv（仅在文件不存在时写入表头）───────────────────────────────
 
 def init_info() -> None:
     panoPath.mkdir(parents=True, exist_ok=True)
     if not infoPath.exists():
-        with open(infoPath, "a", encoding="utf-8", newline="") as f:
+        with open(infoPath, "w", encoding="utf-8", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(["pano_id", "lat", "lon", "heading", "pitch", "roll", "date"])
+            writer.writerow(FIELDNAMES)
         log.info("Created %s", infoPath)
     else:
-        log.info("info.csv exists, appending data only")
+        log.info("info.csv exists, will upsert records")
+
+
+def write_info_records(records: dict[str, dict]) -> None:
+    """Atomically persist panorama metadata to avoid partial-file corruption."""
+    panoPath.mkdir(parents=True, exist_ok=True)
+
+    temp_path: Path | None = None
+    with NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        newline="",
+        dir=panoPath,
+        prefix="info.",
+        suffix=".tmp",
+        delete=False,
+    ) as temp_file:
+        writer = csv.DictWriter(temp_file, fieldnames=FIELDNAMES)
+        writer.writeheader()
+        writer.writerows(records.values())
+        temp_path = Path(temp_file.name)
+
+    try:
+        temp_path.replace(infoPath)
+    except Exception:
+        temp_path.unlink(missing_ok=True)
+        raise
 
 
 # ── 搜索并下载全景图 ─────────────────────────────────────────────────────────
@@ -56,45 +85,66 @@ def fetch_panoramas(loc: tuple[float, float], isCurrent: bool) -> None:
         log.warning("No panoramas found for the given location.")
         return
 
-    with open(infoPath, "a", encoding="utf-8", newline="") as f:
-        writer = csv.writer(f)
-        for i, pano in enumerate(panos):
-            # isCurrent=True  → date 为空（当前最新全景）
-            # isCurrent=False → date 非空（历史数据）
-            if isCurrent and pano.date is not None:
-                continue
-            if not isCurrent and pano.date is None:
-                continue
+    # ── 加载已有记录（全量读入，内存中 upsert）─────────────────────────────
+    records: dict[str, dict] = {}
+    if infoPath.exists():
+        with open(infoPath, encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                records[row["pano_id"]] = row
 
-            writer.writerow([
-                pano.pano_id,
-                pano.lat,
-                pano.lon,
-                pano.heading,
-                pano.pitch,
-                pano.roll,
-                pano.date,
-            ])
+    # ── 遍历搜索结果，upsert ───────────────────────────────────────────────
+    for i, pano in enumerate(panos):
+        # isCurrent=True  → date 为空（当前最新全景）
+        # isCurrent=False → date 非空（历史数据）
+        if isCurrent and pano.date is not None:
+            continue
+        if not isCurrent and pano.date is None:
+            continue
+
+        row = {
+            "pano_id": pano.pano_id,
+            "lat":      pano.lat,
+            "lon":      pano.lon,
+            "heading":  pano.heading,
+            "pitch":    pano.pitch,
+            "roll":     pano.roll,
+            "date":     pano.date,
+        }
+        is_new = pano.pano_id not in records
+        records[pano.pano_id] = row
+
+        if is_new:
             log.info(
-                "  [%d/%d] pano_id=%s  lat=%.6f  lon=%.6f  date=%s",
+                "  [%d/%d] + NEW  pano_id=%s  lat=%.6f  lon=%.6f  date=%s",
                 i + 1, len(panos), pano.pano_id, pano.lat, pano.lon, pano.date,
             )
+        else:
+            log.info(
+                "  [%d/%d] ~ UPDATE pano_id=%s",
+                i + 1, len(panos), pano.pano_id,
+            )
 
-            img_path = panoPath / f"{pano.pano_id}.png"
-            if img_path.exists():
-                log.info("  Already exists, skipping.")
-            else:
-                try:
-                    image = get_panorama(pano=pano, zoom=3, session=session)
-                    image.save(img_path, "png")
-                    log.info("  Saved: %s", img_path.name)
-                except PanoDownloadError as e:
-                    log.warning("  [%s] skipped: %s", pano.pano_id, e)
+        # ── 图片下载（已有则跳过）───────────────────────────────────────────
+        img_path = panoPath / f"{pano.pano_id}.png"
+        if img_path.exists():
+            log.info("  Already exists, skipping.")
+        else:
+            try:
+                # zoom=3: 512×256 output, balanced quality vs file-size
+                image = get_panorama(pano=pano, zoom=3, session=session)
+                image.save(img_path, "png")
+                log.info("  Saved: %s", img_path.name)
+            except PanoDownloadError as e:
+                log.warning("  [%s] skipped: %s", pano.pano_id, e)
 
-            # 节流：每个全景之间随机等待，避免频率限制
-            if i < len(panos) - 1:
-                delay = random.uniform(MIN_DELAY, MAX_DELAY)
-                time.sleep(delay)
+        # 节流：每个全景之间随机等待，避免频率限制
+        if i < len(panos) - 1:
+            delay = random.uniform(MIN_DELAY, MAX_DELAY)
+            time.sleep(delay)
+
+    # ── 全量写回 CSV（去重 + 更新后完整状态）─────────────────────────────────
+    write_info_records(records)
+    log.info("Wrote %d unique records to %s", len(records), infoPath)
 
 
 # ── 入口 ─────────────────────────────────────────────────────────────────────
