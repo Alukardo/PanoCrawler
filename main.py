@@ -12,7 +12,7 @@ from panorama import get_panorama, PanoDownloadError, get_session
 load_dotenv(Path(__file__).parent / ".env")
 
 # ── 配置 ──────────────────────────────────────────────────────────────────────
-panoPath = Path(__file__).parent.parent / "images" / "pano"
+panoPath = Path(__file__).parent / "images" / "pano"
 infoPath = panoPath / "info.csv"
 
 # 每个全景下载后随机等待 3~8 秒，防止触发 Google 频率限制

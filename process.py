@@ -16,8 +16,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 log = logging.getLogger(__name__)
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-SOURCE_DIR = Path(__file__).parent.parent / "images" / "pano"
-OUT_DIR = Path(__file__).parent.parent / "temp"
+SOURCE_DIR = Path(__file__).parent / "images" / "pano"
+OUT_DIR = Path(__file__).parent / "temp"
 INPUT_DIR = OUT_DIR / "train_A"
 OUTPUT_DIR = OUT_DIR / "train_B"
 LABEL_DIR = OUT_DIR / "train_cond"
@@ -101,7 +101,7 @@ if __name__ == "__main__":
     clean(OUTPUT_DIR)
     clean(LABEL_DIR)
 
-    filename = Path(__file__).parent.parent / "images" / "pano" / "info.csv"
+    filename = Path(__file__).parent / "images" / "pano" / "info.csv"
     pairs = process_data(filename)
     log.info("Training pairs generated: %d", pairs)
     log.info("Output: %s", INPUT_DIR.parent)
