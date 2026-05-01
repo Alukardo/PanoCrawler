@@ -1,10 +1,16 @@
 import json
 import re
+from pathlib import Path
 from typing import List, Optional
 
 import requests
 from pydantic import BaseModel
 from requests.models import Response
+import yaml
+
+_CONFIG_PATH = Path(__file__).parent.parent / "config.yaml"
+with open(_CONFIG_PATH, encoding="utf-8") as f:
+    _cfg = yaml.safe_load(f)
 
 
 class Panorama(BaseModel):
@@ -19,7 +25,7 @@ class Panorama(BaseModel):
     tile: Optional[list] = None
 
 
-    def print(self):
+    def print_info(self) -> None:
         print("pano_id : " + self.pano_id)
         print("loc: " + "(" + str(self.lat) + " , " + str(self.lon) + ")")
         print("heading : " + str(self.heading))
@@ -29,7 +35,7 @@ class Panorama(BaseModel):
         print("scale   : " + str(self.scale))
 
 
-    def saveFile(self, file):
+    def save_to_file(self, file) -> None:
         """Write panorama data to a file handle or csv.writer."""
         row = [self.pano_id, self.lat, self.lon, self.heading,
                self.pitch, self.roll, self.date]

@@ -12,8 +12,15 @@ import os
 from pathlib import Path
 from typing import List
 
+import yaml
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
+
+# ── Load config ───────────────────────────────────────────────────────────────
+_CONFIG_PATH = Path(__file__).parent / "config.yaml"
+with open(_CONFIG_PATH, encoding="utf-8") as f:
+    _cfg = yaml.safe_load(f)
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 SOURCE_DIR = Path(__file__).parent / "images" / "pano"
@@ -23,10 +30,7 @@ OUTPUT_DIR = OUT_DIR / "train_B"
 LABEL_DIR = OUT_DIR / "train_cond"
 
 # 距离阈值：小于此值视为同位置（单位：度²）
-# 0.00000001 ≈ 1.1m at equator
-# NOTE: 此阈值较严格。Google 全景 GPS 存在误差，同一地点两次拍摄
-#       可能略超此值而导致配对失败。如配对数量过少，可适当放宽。
-DISTANCE_THRESHOLD = 0.00000001
+DISTANCE_THRESHOLD = _cfg["distance_threshold"]  # ≈ 1.1m at equator
 
 
 def clean(dic: Path) -> None:
@@ -78,15 +82,15 @@ def process_data(filename: Path) -> int:
             continue
 
         # Forward pair: a → b
-        (INPUT_DIR / f"int{count:05d}.png").write_bytes(source.read_bytes())
-        (OUTPUT_DIR / f"out{count:05d}.png").write_bytes(target.read_bytes())
-        (LABEL_DIR / f"ins{count:05d}.txt").write_text(f"{d_lat:.16f}\n{d_lon:.16f}\n")
+        (INPUT_DIR / f"{_cfg['prefix_int']}{count:05d}.png").write_bytes(source.read_bytes())
+        (OUTPUT_DIR / f"{_cfg['prefix_out']}{count:05d}.png").write_bytes(target.read_bytes())
+        (LABEL_DIR / f"{_cfg['prefix_ins']}{count:05d}.txt").write_text(f"{d_lat:.16f}\n{d_lon:.16f}\n")
         count += 1
 
         # Reverse pair: b → a
-        (INPUT_DIR / f"int{count:05d}.png").write_bytes(target.read_bytes())
-        (OUTPUT_DIR / f"out{count:05d}.png").write_bytes(source.read_bytes())
-        (LABEL_DIR / f"ins{count:05d}.txt").write_text(f"{-d_lat:.16f}\n{-d_lon:.16f}\n")
+        (INPUT_DIR / f"{_cfg['prefix_int']}{count:05d}.png").write_bytes(target.read_bytes())
+        (OUTPUT_DIR / f"{_cfg['prefix_out']}{count:05d}.png").write_bytes(source.read_bytes())
+        (LABEL_DIR / f"{_cfg['prefix_ins']}{count:05d}.txt").write_text(f"{-d_lat:.16f}\n{-d_lon:.16f}\n")
         count += 1
 
     return count

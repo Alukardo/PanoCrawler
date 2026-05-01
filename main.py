@@ -4,21 +4,29 @@ import random
 import time
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+from typing import Tuple
 
+import yaml
 from dotenv import load_dotenv
-from panorama import search_panoramas
-from panorama import get_panorama, PanoDownloadError, get_session
+
+from panorama import search_panoramas, get_panorama, PanoDownloadError, get_session
 
 load_dotenv(Path(__file__).parent / ".env")
+
+# ── Load config ───────────────────────────────────────────────────────────────
+_CONFIG_PATH = Path(__file__).parent / "config.yaml"
+with open(_CONFIG_PATH, encoding="utf-8") as f:
+    _cfg = yaml.safe_load(f)
 
 # ── 配置 ──────────────────────────────────────────────────────────────────────
 panoPath = Path(__file__).parent / "images" / "pano"
 infoPath = panoPath / "info.csv"
 
 # 每个全景下载后随机等待 3~8 秒，防止触发 Google 频率限制
-MIN_DELAY, MAX_DELAY = 3.0, 8.0
+MIN_DELAY = _cfg["min_delay"]
+MAX_DELAY = _cfg["max_delay"]
 
-locList = [
+locList: list[Tuple[float, float]] = [
     (25.045711097729114, 121.51134055812804),
 ]
 
@@ -73,7 +81,7 @@ def write_info_records(records: dict[str, dict]) -> None:
 
 # ── 搜索并下载全景图 ─────────────────────────────────────────────────────────
 
-def fetch_panoramas(loc: tuple[float, float], isCurrent: bool) -> None:
+def fetch_panoramas(loc: Tuple[float, float], isCurrent: bool) -> None:
     lat, lon = loc
     session = get_session()
 
@@ -131,7 +139,7 @@ def fetch_panoramas(loc: tuple[float, float], isCurrent: bool) -> None:
         else:
             try:
                 # zoom=3: 512×256 output, balanced quality vs file-size
-                image = get_panorama(pano=pano, zoom=3, session=session)
+                image = get_panorama(pano=pano, zoom=_cfg["zoom"], session=session)
                 image.save(img_path, "png")
                 log.info("  Saved: %s", img_path.name)
             except PanoDownloadError as e:

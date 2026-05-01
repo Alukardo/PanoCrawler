@@ -1,0 +1,28 @@
+# ── 全局 ─────────────────────────────────────────────
+project_name: "PanoCrawler"
+version: "1.0.0"
+
+# ── 下载相关 ─────────────────────────────────────────
+zoom: 3                              # main.py:103 硬编码
+min_delay: 3.0                        # main.py:MIN_DELAY
+max_delay: 8.0                        # main.py:MAX_DELAY
+output_size: [1024, 512]              # download.py:OUTPUT_SIZE
+date_threshold: "2017-09"             # download.py:DATE_THRESHOLD
+
+# ── 搜索相关 ─────────────────────────────────────────
+search_url_base: "https://maps.googleapis.com/maps/api/js/GeoPhotoService.SingleImageSearch"
+
+# ── 处理相关 ─────────────────────────────────────────
+# 距离阈值：小于此值视为同位置（单位：度²）
+# 0.00000001 ≈ 1.1m at equator
+distance_threshold: 0.00000001       # process.py:DISTANCE_THRESHOLD
+prefix_int: "int"                     # process.py 魔法字符串
+prefix_out: "out"
+prefix_ins: "ins"
+
+# ── CSV 字段 ─────────────────────────────────────────
+fieldnames: ["pano_id", "lat", "lon", "heading", "pitch", "roll", "date"]
+
+# ── Tile 下载 ─────────────────────────────────────────
+tile_timeout: 20
+max_retries: 3

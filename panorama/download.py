@@ -4,6 +4,7 @@ import time
 import random
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from io import BytesIO
 from typing import Generator, Tuple
 
@@ -11,15 +12,21 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from PIL import Image
+import yaml
 
 from .search import Panorama
 
 log = logging.getLogger(__name__)
 
+# ── Load config ───────────────────────────────────────────────────────────────
+_CONFIG_PATH = Path(__file__).parent.parent / "config.yaml"
+with open(_CONFIG_PATH, encoding="utf-8") as f:
+    _cfg = yaml.safe_load(f)
+
 # ── Constants ────────────────────────────────────────────────────────────────
 
-DATE_THRESHOLD = datetime.strptime("2017-09", "%Y-%m")
-OUTPUT_SIZE = (1024, 512)
+DATE_THRESHOLD = datetime.strptime(_cfg["date_threshold"], "%Y-%m")
+OUTPUT_SIZE = tuple(_cfg["output_size"])
 
 # Tile server politely identifies itself
 TILE_HEADERS = {
@@ -96,7 +103,7 @@ def make_download_url(pano_id: str, zoom: int, x: int, y: int) -> str:
 def fetch_panorama_tile(tile_info: TileInfo, session: requests.Session) -> Image.Image:
     """
     Downloads a single tile using the shared session.
-    Retries once with exponential backoff on transient errors.
+    Retries up to 3 times with exponential backoff on transient errors.
     Raises on hard failures (403 without Retry-After, etc.).
     """
     max_attempts = 3
@@ -161,12 +168,12 @@ def get_panorama(pano: Panorama, zoom: int = 5, session: requests.Session | None
 
     scale_width, scale_height = get_width_and_height_from_zoom(zoom)
 
-    time_state = True
+    is_post_2017 = True
     if pano.date is not None:
-        time_state = datetime.strptime(pano.date, "%Y-%m") > DATE_THRESHOLD
+        is_post_2017 = datetime.strptime(pano.date, "%Y-%m") > DATE_THRESHOLD
 
-    real_width = 256 * (2**zoom) if time_state else 208 * 2**zoom
-    real_height = 512 * (2**zoom) if time_state else 416 * (2**zoom)
+    real_width = 256 * (2**zoom) if is_post_2017 else 208 * 2**zoom
+    real_height = 512 * (2**zoom) if is_post_2017 else 416 * (2**zoom)
 
     total_width = pano.scale[zoom][0][1]
     total_height = pano.scale[zoom][0][0]
