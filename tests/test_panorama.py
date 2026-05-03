@@ -22,7 +22,7 @@ from panorama.download import (
     PanoDownloadError,
 )
 from panorama.download import Tile
-from unities import eulerAnglesToRotationMatrix
+from panorama.geometry import eulerAnglesToRotationMatrix
 
 
 # ─── search.py ────────────────────────────────────────────────────────────────
