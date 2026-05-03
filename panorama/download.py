@@ -1,5 +1,6 @@
 import itertools
 import logging
+import os
 import time
 import random
 from dataclasses import dataclass
@@ -170,9 +171,9 @@ class MapsTileAPIDownloader:
 # ── Factory ──────────────────────────────────────────────────────────────────
 def get_downloader(api_key: str | None = None) -> MapsTileAPIDownloader:
     if api_key is None:
-        api_key = _cfg.get("api_key", "")
+        api_key = os.getenv("GOOGLE_API_KEY")
     if not api_key:
-        raise PanoDownloadError("api_key must be set")
+        raise PanoDownloadError("api_key must be set via the GOOGLE_API_KEY environment variable")
     return MapsTileAPIDownloader(api_key=api_key)
 
 
@@ -199,7 +200,7 @@ def get_panorama(
     total_width = pano.scale[zoom][0][1]
     total_height = pano.scale[zoom][0][0]
 
-    downloader = get_downloader(api_key=_cfg.get("api_key", ""))
+    downloader = get_downloader()
 
     # 1. 拼图
     panorama = Image.new("RGB", (total_width, total_height))

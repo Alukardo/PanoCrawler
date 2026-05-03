@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 from panorama import search_panoramas, get_panorama, PanoDownloadError, get_session, PanoramaSearchError
 from panorama.process_images import detect_and_crop_black_edge
 
-load_dotenv(Path(__file__).parent / ".env")
+load_dotenv(Path(__file__).parent / ".apikey")
 
 # ── Load config ───────────────────────────────────────────────────────────────
 _CONFIG_PATH = Path(__file__).parent / "config.yaml"

@@ -10,7 +10,7 @@ output_size: [1024, 512]
 date_threshold: "2017-09"
 
 # ── Maps Tile API ────────────────────────────────────
-api_key: "AIzaSyB5W5MWuqU3w8Lzeuh51INwCczID1YR0vw"
+# api_key should be configured via environment variable GOOGLE_API_KEY
 
 # ── 搜索相关 ─────────────────────────────────────────
 search_url_base: "https://maps.googleapis.com/maps/api/js/GeoPhotoService.SingleImageSearch"

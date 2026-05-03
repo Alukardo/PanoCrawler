@@ -1,6 +1,9 @@
 __pycache__/
 *.py[cod]
 *.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 .DS_Store
 .idea/
 *.egg-info/
@@ -9,5 +12,5 @@ build/
 *.zip
 images/
 temp/
-.env
+.apikey
 .venv/
