@@ -23,8 +23,9 @@ with open(_CONFIG_PATH, encoding="utf-8") as f:
     _cfg = yaml.safe_load(f)
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-SOURCE_DIR = Path(__file__).parent / "images" / "pano"
-OUT_DIR = Path(__file__).parent / "temp"
+SOURCE_DIR = Path(__file__).parent / _cfg["images_dir"]
+METADATA_PATH = Path(__file__).parent / _cfg.get("metadata_path", "images/info.csv")
+OUT_DIR = Path(__file__).parent / _cfg["temp_dir"]
 INPUT_DIR = OUT_DIR / "train_A"
 OUTPUT_DIR = OUT_DIR / "train_B"
 LABEL_DIR = OUT_DIR / "train_cond"
@@ -105,7 +106,6 @@ if __name__ == "__main__":
     clean(OUTPUT_DIR)
     clean(LABEL_DIR)
 
-    filename = Path(__file__).parent / "images" / "pano" / "info.csv"
-    pairs = process_data(filename)
+    pairs = process_data(METADATA_PATH)
     log.info("Training pairs generated: %d", pairs)
     log.info("Output: %s", INPUT_DIR.parent)

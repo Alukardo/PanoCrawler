@@ -12,6 +12,12 @@ _CONFIG_PATH = Path(__file__).parent.parent / "config.yaml"
 with open(_CONFIG_PATH, encoding="utf-8") as f:
     _cfg = yaml.safe_load(f)
 
+SEARCH_TIMEOUT = _cfg.get("search_timeout", 15)
+
+
+class PanoramaSearchError(Exception):
+    pass
+
 
 class Panorama(BaseModel):
     pano_id: str
@@ -70,7 +76,12 @@ def search_request(lat: float, lon: float) -> Response:
     closest panorama (ids) to a give GPS coordinate.
     """
     url = make_search_url(lat, lon)
-    return requests.get(url)
+    try:
+        resp = requests.get(url, timeout=SEARCH_TIMEOUT)
+        resp.raise_for_status()
+        return resp
+    except requests.RequestException as e:
+        raise PanoramaSearchError(f"Search request failed for ({lat}, {lon}): {e}") from e
 
 
 def extract_panoramas(text: str) -> List[Panorama]:
@@ -81,43 +92,49 @@ def extract_panoramas(text: str) -> List[Panorama]:
 
     # The response is actually JavaScript code. It's a function with a single
     # input which is a huge deeply nested array of items.
-    blob = re.findall(r"callbackfunc\( (.*) \)$", text)[0]
-    data = json.loads(blob)
+    match = re.search(r"callbackfunc\(\s*(.*)\s*\)$", text.strip())
+    if match is None:
+        raise PanoramaSearchError("Search response did not contain callbackfunc payload")
 
-    if data == [[5, "generic", "Search returned no images."]]:
-        return []
+    try:
+        data = json.loads(match.group(1))
 
-    subset = data[1][5][0]
-    scale = data[1][2][3][0]
-    raw_panos = subset[3][0]
+        if data == [[5, "generic", "Search returned no images."]]:
+            return []
 
-    tile_size = data[1][2][3][1]
+        subset = data[1][5][0]
+        scale = data[1][2][3][0]
+        raw_panos = subset[3][0]
 
-    if len(subset) < 9 or subset[8] is None:
-        raw_dates = []
-    else:
-        raw_dates = subset[8]
+        tile_size = data[1][2][3][1]
 
-    # Build date lookup by pano_id (robust — order/slice doesn't matter)
-    date_map = {
-        raw_panos[d[0]][0][1]: f"{d[1][0]}-{d[1][1]:02d}"
-        for d in raw_dates
-    }
+        if len(subset) < 9 or subset[8] is None:
+            raw_dates = []
+        else:
+            raw_dates = subset[8]
 
-    return [
-        Panorama(
-            pano_id=pano[0][1],
-            lat=pano[2][0][2],
-            lon=pano[2][0][3],
-            heading=pano[2][2][0],
-            pitch=pano[2][2][1] if len(pano[2][2]) >= 2 else None,
-            roll=pano[2][2][2] if len(pano[2][2]) >= 3 else None,
-            date=date_map.get(pano[0][1]),
-            scale=scale,
-            tile=tile_size
-        )
-        for pano in raw_panos
-    ]
+        # Build date lookup by pano_id (robust — order/slice doesn't matter)
+        date_map = {
+            raw_panos[d[0]][0][1]: f"{d[1][0]}-{d[1][1]:02d}"
+            for d in raw_dates
+        }
+
+        return [
+            Panorama(
+                pano_id=pano[0][1],
+                lat=pano[2][0][2],
+                lon=pano[2][0][3],
+                heading=pano[2][2][0],
+                pitch=pano[2][2][1] if len(pano[2][2]) >= 2 else None,
+                roll=pano[2][2][2] if len(pano[2][2]) >= 3 else None,
+                date=date_map.get(pano[0][1]),
+                scale=scale,
+                tile=tile_size
+            )
+            for pano in raw_panos
+        ]
+    except (json.JSONDecodeError, IndexError, KeyError, TypeError, ValueError) as e:
+        raise PanoramaSearchError("Could not parse panorama search response") from e
 
 
 def search_panoramas(lat: float, lon: float) -> List[Panorama]:

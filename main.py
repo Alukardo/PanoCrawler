@@ -9,7 +9,8 @@ from typing import Tuple
 import yaml
 from dotenv import load_dotenv
 
-from panorama import search_panoramas, get_panorama, PanoDownloadError, get_session
+from panorama import search_panoramas, get_panorama, PanoDownloadError, get_session, PanoramaSearchError
+from panorama.process_images import detect_and_crop_black_edge
 
 load_dotenv(Path(__file__).parent / ".env")
 
@@ -19,8 +20,10 @@ with open(_CONFIG_PATH, encoding="utf-8") as f:
     _cfg = yaml.safe_load(f)
 
 # ── 配置 ──────────────────────────────────────────────────────────────────────
-panoPath = Path(__file__).parent / "images" / "pano"
-infoPath = panoPath / "info.csv"
+images_dir = Path(__file__).parent / _cfg["images_dir"]
+metadata_path = Path(__file__).parent / _cfg.get("metadata_path", "images/info.csv")
+panoPath = images_dir
+infoPath = metadata_path
 
 # 每个全景下载后随机等待 3~8 秒，防止触发 Google 频率限制
 MIN_DELAY = _cfg["min_delay"]
@@ -44,6 +47,7 @@ FIELDNAMES = ["pano_id", "lat", "lon", "heading", "pitch", "roll", "date"]
 
 def init_info() -> None:
     panoPath.mkdir(parents=True, exist_ok=True)
+    infoPath.parent.mkdir(parents=True, exist_ok=True)
     if not infoPath.exists():
         with open(infoPath, "w", encoding="utf-8", newline="") as f:
             writer = csv.writer(f)
@@ -56,13 +60,14 @@ def init_info() -> None:
 def write_info_records(records: dict[str, dict]) -> None:
     """Atomically persist panorama metadata to avoid partial-file corruption."""
     panoPath.mkdir(parents=True, exist_ok=True)
+    infoPath.parent.mkdir(parents=True, exist_ok=True)
 
     temp_path: Path | None = None
     with NamedTemporaryFile(
         "w",
         encoding="utf-8",
         newline="",
-        dir=panoPath,
+        dir=infoPath.parent,
         prefix="info.",
         suffix=".tmp",
         delete=False,
@@ -86,7 +91,11 @@ def fetch_panoramas(loc: Tuple[float, float], isCurrent: bool) -> None:
     session = get_session()
 
     log.info("Searching near (%.6f, %.6f)...", lat, lon)
-    panos = search_panoramas(lat=lat, lon=lon)
+    try:
+        panos = search_panoramas(lat=lat, lon=lon)
+    except PanoramaSearchError as e:
+        log.warning("Search failed near (%.6f, %.6f): %s", lat, lon, e)
+        return
     log.info("Found %d panorama(s)", len(panos))
 
     if not panos:
@@ -100,7 +109,7 @@ def fetch_panoramas(loc: Tuple[float, float], isCurrent: bool) -> None:
             for row in csv.DictReader(f):
                 records[row["pano_id"]] = row
 
-    # ── 遍历搜索结果，upsert ───────────────────────────────────────────────
+    # ── 遍历搜索结果，图片可用后再 upsert ───────────────────────────────────
     for i, pano in enumerate(panos):
         # isCurrent=True  → date 为空（当前最新全景）
         # isCurrent=False → date 非空（历史数据）
@@ -118,10 +127,8 @@ def fetch_panoramas(loc: Tuple[float, float], isCurrent: bool) -> None:
             "roll":     pano.roll,
             "date":     pano.date,
         }
-        is_new = pano.pano_id not in records
-        records[pano.pano_id] = row
-
-        if is_new:
+        was_recorded = pano.pano_id in records
+        if not was_recorded:
             log.info(
                 "  [%d/%d] + NEW  pano_id=%s  lat=%.6f  lon=%.6f  date=%s",
                 i + 1, len(panos), pano.pano_id, pano.lat, pano.lon, pano.date,
@@ -136,14 +143,32 @@ def fetch_panoramas(loc: Tuple[float, float], isCurrent: bool) -> None:
         img_path = panoPath / f"{pano.pano_id}.png"
         if img_path.exists():
             log.info("  Already exists, skipping.")
+            records[pano.pano_id] = row
         else:
+            tmp_path = panoPath / f".{pano.pano_id}.download.tmp.png"
+            processed_tmp_path = panoPath / f".{pano.pano_id}.processed.tmp.png"
             try:
                 # zoom=3: 512×256 output, balanced quality vs file-size
                 image = get_panorama(pano=pano, zoom=_cfg["zoom"], session=session)
-                image.save(img_path, "png")
+                image.save(tmp_path, "png")
+
+                # 黑边检测/裁剪（可选）
+                if _cfg.get("process_on_download", False):
+                    threshold = _cfg.get("black_threshold", 15)
+                    cropped = detect_and_crop_black_edge(tmp_path, processed_tmp_path, threshold=threshold)
+                    if cropped:
+                        log.info("  Black edge cropped")
+                    processed_tmp_path.replace(tmp_path)
+
+                tmp_path.replace(img_path)
+
                 log.info("  Saved: %s", img_path.name)
-            except PanoDownloadError as e:
+                records[pano.pano_id] = row
+            except Exception as e:
+                records.pop(pano.pano_id, None)
                 log.warning("  [%s] skipped: %s", pano.pano_id, e)
+                tmp_path.unlink(missing_ok=True)
+                processed_tmp_path.unlink(missing_ok=True)
 
         # 节流：每个全景之间随机等待，避免频率限制
         if i < len(panos) - 1:

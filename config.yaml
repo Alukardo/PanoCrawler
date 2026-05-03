@@ -3,22 +3,26 @@ project_name: "PanoCrawler"
 version: "1.0.0"
 
 # ── 下载相关 ─────────────────────────────────────────
-zoom: 3                              # main.py:103 硬编码
-min_delay: 3.0                        # main.py:MIN_DELAY
-max_delay: 8.0                        # main.py:MAX_DELAY
-output_size: [1024, 512]              # download.py:OUTPUT_SIZE
-date_threshold: "2017-09"             # download.py:DATE_THRESHOLD
+zoom: 1
+min_delay: 3.0
+max_delay: 8.0
+output_size: [1024, 512]
+date_threshold: "2017-09"
+
+# ── Maps Tile API ────────────────────────────────────
+api_key: "AIzaSyB5W5MWuqU3w8Lzeuh51INwCczID1YR0vw"
 
 # ── 搜索相关 ─────────────────────────────────────────
 search_url_base: "https://maps.googleapis.com/maps/api/js/GeoPhotoService.SingleImageSearch"
 
 # ── 处理相关 ─────────────────────────────────────────
-# 距离阈值：小于此值视为同位置（单位：度²）
-# 0.00000001 ≈ 1.1m at equator
-distance_threshold: 0.00000001       # process.py:DISTANCE_THRESHOLD
-prefix_int: "int"                     # process.py 魔法字符串
+distance_threshold: 0.00000001
+prefix_int: "int"
 prefix_out: "out"
 prefix_ins: "ins"
+black_threshold: 15
+bottom_black_edge_ratio: 0.05
+process_on_download: false
 
 # ── CSV 字段 ─────────────────────────────────────────
 fieldnames: ["pano_id", "lat", "lon", "heading", "pitch", "roll", "date"]
@@ -26,3 +30,9 @@ fieldnames: ["pano_id", "lat", "lon", "heading", "pitch", "roll", "date"]
 # ── Tile 下载 ─────────────────────────────────────────
 tile_timeout: 20
 max_retries: 3
+
+# ── 路径配置 ─────────────────────────────────────────
+images_dir: "images/pano"
+metadata_path: "images/info.csv"
+temp_dir: "temp"
+output_dir: "images/pano"
