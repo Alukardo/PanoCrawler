@@ -12,5 +12,7 @@ build/
 *.zip
 images/
 temp/
+quality_dataset/
+runtime/
 .apikey
 .venv/

@@ -8,6 +8,9 @@ min_delay: 3.0
 max_delay: 8.0
 output_size: [1024, 512]
 date_threshold: "2017-09"
+crawl_mode: "random_incremental"
+random_crawl_target_new: 200
+random_crawl_max_searches: 2000
 
 # ── Maps Tile API ────────────────────────────────────
 # api_key should be configured via environment variable GOOGLE_API_KEY
@@ -22,17 +25,24 @@ prefix_out: "out"
 prefix_ins: "ins"
 black_threshold: 15
 bottom_black_edge_ratio: 0.05
+horizontal_redundancy_mad_threshold: 5.0
 process_on_download: false
 
 # ── CSV 字段 ─────────────────────────────────────────
-fieldnames: ["pano_id", "lat", "lon", "heading", "pitch", "roll", "date"]
+fieldnames: ["pano_id", "lat", "lon", "heading", "pitch", "roll", "date", "search_point"]
 
 # ── Tile 下载 ─────────────────────────────────────────
 tile_timeout: 20
 max_retries: 3
 
+google_api_quota_tracking_enabled: true
+google_api_daily_quota: 15000
+google_api_daily_soft_limit: 13500
+google_api_usage_path: "runtime/google_api_usage.json"
+
 # ── 路径配置 ─────────────────────────────────────────
-images_dir: "images/pano"
-metadata_path: "images/info.csv"
+images_root: "/Users/alukardo/Documents/NTUST/研究資料/Researchs/[2026] NeRF/images"
+images_dir: "pano"
+metadata_path: "info.csv"
 temp_dir: "temp"
-output_dir: "images/pano"
+output_dir: "pano"

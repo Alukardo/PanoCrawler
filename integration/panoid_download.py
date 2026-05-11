@@ -4,6 +4,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from panorama import search_panoramas, download_by_pano_id
+from panorama.config import cfg, resolve_images_path
 
 
 def main() -> None:
@@ -21,7 +22,7 @@ def main() -> None:
         try:
             img = download_by_pano_id(pano.pano_id, zoom=3)
             print(f"下载成功，尺寸: {img.size}")
-            img_path = Path("images/pano") / f"{pano.pano_id}.png"
+            img_path = resolve_images_path(cfg.get("output_dir", cfg.get("images_dir", "pano"))) / f"{pano.pano_id}.png"
             print(f"图片已保存: {img_path}")
             import subprocess
             subprocess.run(["open", str(img_path)], check=True)

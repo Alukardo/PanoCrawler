@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="zh-Hant" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PanoCrawler Visualization</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="app-shell">
+    <section class="globe-stage">
+      <div id="globe"></div>
+    </section>
+
+    <aside class="panel control-panel">
+      <div class="brand-row">
+        <div>
+          <h1 class="brand-title">PanoCrawler</h1>
+          <p class="brand-subtitle">WebGL 地球可视化 · 本地离线静态页面</p>
+        </div>
+        <button id="themeToggle" class="button icon" type="button">浅色</button>
+      </div>
+
+      <div class="action-row">
+        <button id="loadConfiguredData" class="button primary" type="button">读取配置与数据</button>
+        <button id="clearData" class="button" type="button">清空</button>
+      </div>
+
+      <div class="stat-grid">
+        <div class="stat-card">
+          <div id="downloadCount" class="stat-value">0</div>
+          <div class="stat-label">全景记录</div>
+        </div>
+        <div class="stat-card">
+          <div id="visibleCount" class="stat-value">0</div>
+          <div class="stat-label">搜索点</div>
+        </div>
+      </div>
+
+      <p id="statusText" class="status-text">准备就绪。</p>
+    </aside>
+
+    <aside id="detailPanel" class="panel detail-panel"></aside>
+
+    <section class="panel legend-panel">
+      <div class="legend">
+        <span class="legend-item"><span class="legend-dot search"></span>搜索点</span>
+      </div>
+    </section>
+  </main>
+
+  <script src="vendor/echarts.min.js"></script>
+  <script src="vendor/echarts-gl.min.js"></script>
+  <script src="texture-data.js"></script>
+  <script src="app.js?v=20260511-disable-label"></script>
+</body>
+</html>

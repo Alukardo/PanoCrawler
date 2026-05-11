@@ -12,17 +12,16 @@ import requests
 from PIL import Image
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-import yaml
 
+from .config import cfg as _cfg, resolve_images_path, resolve_project_path
 from .search import Panorama
 from .process_images import crop_black_edge_from_image
+from .quality import apply_heading_adjustment
+from .quota import GoogleAPIQuotaExceededError, record_failed_request, reserve_request
 
 log = logging.getLogger(__name__)
 
 # ── Load config ───────────────────────────────────────────────────────────────
-_CONFIG_PATH = Path(__file__).parent.parent / "config.yaml"
-with open(_CONFIG_PATH, encoding="utf-8") as f:
-    _cfg = yaml.safe_load(f)
 
 # ── Constants ───────────────────────────────────────────────────────────────
 OUTPUT_SIZE = tuple(_cfg["output_size"])
@@ -48,9 +47,9 @@ def get_session() -> requests.Session:
         _session = requests.Session()
         _session.headers.update(_TILE_HEADERS)
         retry_strategy = Retry(
-            total=3,
+            total=0,
             backoff_factor=1.0,
-            status_forcelist={403, 429, 500, 502, 503, 504},
+            status_forcelist=set(),
             allowed_methods=["GET"],
             raise_on_status=False,
         )
@@ -71,6 +70,15 @@ class Tile:
     image: Image.Image
 
 
+@dataclass
+class PanoramaStages:
+    raw: Image.Image
+    base: Image.Image
+    final: Image.Image
+    zoom: int
+    downloaded_tiles: int
+
+
 # ── Tile API ─────────────────────────────────────────────────────────────────
 def get_width_and_height_from_zoom(zoom: int) -> Tuple[int, int]:
     """
@@ -79,6 +87,30 @@ def get_width_and_height_from_zoom(zoom: int) -> Tuple[int, int]:
     e.g. zoom=1 → 4×2 tiles (1024×512), zoom=2 → 8×4 tiles (2048×1024)
     """
     return 2 ** (zoom + 1), 2**zoom
+
+
+def get_tile_grid_for_canvas(canvas_size: Tuple[int, int], tile_size: Tuple[int, int]) -> Tuple[int, int]:
+    canvas_width, canvas_height = canvas_size
+    tile_width, tile_height = tile_size
+    if min(canvas_width, canvas_height, tile_width, tile_height) <= 0:
+        raise ValueError("Canvas and tile dimensions must be positive")
+    return (
+        (canvas_width + tile_width - 1) // tile_width,
+        (canvas_height + tile_height - 1) // tile_height,
+    )
+
+
+def choose_best_zoom_for_output(pano: Panorama, target_size: Tuple[int, int]) -> int:
+    """
+    Choose the smallest zoom level whose canvas meets or exceeds the target size.
+    """
+    if pano.zoom_resolutions:
+        target_width, target_height = target_size
+        for zoom, (width, height) in enumerate(pano.zoom_resolutions):
+            if width >= target_width and height >= target_height:
+                return zoom
+        return len(pano.zoom_resolutions) - 1
+    return _cfg.get("zoom", 1)
 
 
 # ── Official Maps Tile API Downloader ────────────────────────────────────────
@@ -105,15 +137,30 @@ class MapsTileAPIDownloader:
         self._session_cache: dict[str, str] = {}
 
     def _create_session(self) -> str:
-        resp = requests.post(
-            self.SESSION_URL,
-            params={"key": self.api_key},
-            json={"mapType": "streetview", "language": "en-US", "region": "US"},
-            headers={"Content-Type": "application/json"},
-            timeout=TILE_TIMEOUT,
-        )
-        resp.raise_for_status()
-        return resp.json()["session"]
+        try:
+            reserve_request("session_requests")
+        except GoogleAPIQuotaExceededError as e:
+            raise PanoDownloadError(str(e)) from e
+        try:
+            resp = requests.post(
+                self.SESSION_URL,
+                params={"key": self.api_key},
+                json={"mapType": "streetview", "language": "en-US", "region": "US"},
+                headers={"Content-Type": "application/json"},
+                timeout=TILE_TIMEOUT,
+            )
+            resp.raise_for_status()
+            token = resp.json()["session"]
+        except requests.RequestException as e:
+            record_failed_request("session_failures")
+            raise PanoDownloadError(f"Failed to create tile session: {e}") from e
+        except (KeyError, TypeError, ValueError) as e:
+            record_failed_request("session_failures")
+            raise PanoDownloadError("Failed to create tile session: missing session token") from e
+        if not token:
+            record_failed_request("session_failures")
+            raise PanoDownloadError("Failed to create tile session: missing session token")
+        return token
 
     def download_tile(
         self,
@@ -132,23 +179,31 @@ class MapsTileAPIDownloader:
         )
         for attempt in range(MAX_RETRIES):
             try:
+                reserve_request("tile_requests")
+            except GoogleAPIQuotaExceededError as e:
+                raise PanoDownloadError(str(e)) from e
+            try:
                 resp = session.get(url, stream=True, timeout=TILE_TIMEOUT)
                 if resp.status_code == 400:
-                    raise PanoDownloadError(f"400 Bad Request for tile ({x},{y}) — out of range for this pano")
+                    record_failed_request("tile_400_out_of_range")
+                    raise PanoTileOutOfRangeError(f"400 Bad Request for tile ({x},{y}) — out of range for this pano")
                 if resp.status_code == 403:
+                    record_failed_request("tile_403_forbidden")
                     raise PanoDownloadError(f"403 Forbidden — pano may not exist: {pano_id}")
                 if resp.status_code == 429:
+                    record_failed_request("tile_429_rate_limited")
                     wait = int(resp.headers.get("Retry-After", 5))
                     log.warning("429 rate-limited, waiting %ds", wait)
                     time.sleep(wait)
                     continue
                 resp.raise_for_status()
                 return Image.open(BytesIO(resp.content))
-            except requests.RequestException:
+            except requests.RequestException as e:
+                record_failed_request("tile_failures")
                 if attempt < MAX_RETRIES - 1:
                     time.sleep(1.0 * (2**attempt) + random.uniform(0, 0.5))
                 else:
-                    raise
+                    raise PanoDownloadError(f"Failed to download tile ({x},{y}): {e}") from e
         raise PanoDownloadError(f"Failed to download tile ({x},{y}) after {MAX_RETRIES} attempts")
 
     def iter_tiles(
@@ -156,14 +211,17 @@ class MapsTileAPIDownloader:
         pano_id: str,
         zoom: int,
         session: requests.Session,
+        cols: int | None = None,
+        rows: int | None = None,
     ) -> Generator[Tile, None, None]:
         """Iterate all tiles. Skips tiles that are out of range (400) for this pano."""
-        cols, rows = get_width_and_height_from_zoom(zoom)
+        if cols is None or rows is None:
+            cols, rows = get_width_and_height_from_zoom(zoom)
         for x, y in itertools.product(range(cols), range(rows)):
             try:
                 image = self.download_tile(pano_id, zoom, x, y, session)
                 yield Tile(x=x, y=y, image=image)
-            except PanoDownloadError as e:
+            except PanoTileOutOfRangeError as e:
                 log.debug("Skipping tile (%d,%d): %s", x, y, e)
                 continue
 
@@ -182,11 +240,15 @@ class PanoDownloadError(Exception):
     pass
 
 
+class PanoTileOutOfRangeError(PanoDownloadError):
+    pass
+
+
 # ── Main download functions ──────────────────────────────────────────────────
 
 def get_panorama(
     pano: Panorama,
-    zoom: int = 5,
+    zoom: int | None = None,
     session: requests.Session | None = None,
 ) -> Image.Image:
     """
@@ -194,42 +256,38 @@ def get_panorama(
 
     Pipeline: 拼图 → 黑边裁剪 → resize(OUTPUT_SIZE) → heading旋转
     """
+    return get_panorama_stages(pano=pano, zoom=zoom, session=session).final
+
+
+def get_panorama_stages(
+    pano: Panorama,
+    zoom: int | None = None,
+    session: requests.Session | None = None,
+) -> PanoramaStages:
     if session is None:
         session = get_session()
-
-    total_width = pano.scale[zoom][0][1]
-    total_height = pano.scale[zoom][0][0]
-
+    if zoom is None:
+        zoom = choose_best_zoom_for_output(pano, OUTPUT_SIZE)
+    total_width, total_height = pano.get_canvas_size(zoom)
     downloader = get_downloader()
-
-    # 1. 拼图
-    panorama = Image.new("RGB", (total_width, total_height))
+    raw = Image.new("RGB", (total_width, total_height))
     downloaded = 0
     try:
-        for tile in downloader.iter_tiles(pano_id=pano.pano_id, zoom=zoom, session=session):
-            panorama.paste(im=tile.image, box=(tile.x * pano.tile[1], tile.y * pano.tile[0]))
+        tile_width, tile_height = (pano.tile[1], pano.tile[0]) if pano.tile and len(pano.tile) >= 2 else (512, 512)
+        cols, rows = get_tile_grid_for_canvas((total_width, total_height), (tile_width, tile_height))
+        for tile in downloader.iter_tiles(pano_id=pano.pano_id, zoom=zoom, session=session, cols=cols, rows=rows):
+            raw.paste(im=tile.image, box=(tile.x * tile_width, tile.y * tile_height))
             downloaded += 1
+    except PanoDownloadError:
+        raise
     except Exception as e:
         raise PanoDownloadError(f"Tile download failed for pano {pano.pano_id}: {e}") from e
     if downloaded == 0:
         raise PanoDownloadError(f"No tiles downloaded for pano {pano.pano_id}")
-
-    # 2. 黑边裁剪（纯像素，无损）
-    panorama = crop_black_edge_from_image(panorama, threshold=_cfg.get("black_threshold", 15))
-
-    # 3. resize 到最终尺寸
-    panorama = panorama.resize(OUTPUT_SIZE)
-
-    # 4. heading 旋转（像素剪切/粘贴，无损）
-    heading_norm = pano.heading % 360
-    clip_x = int(heading_norm / 360.0 * OUTPUT_SIZE[0])
-    if clip_x > 0:
-        clip1 = panorama.crop((0, 0, clip_x, OUTPUT_SIZE[1]))
-        clip2 = panorama.crop((clip_x, 0, OUTPUT_SIZE[0], OUTPUT_SIZE[1]))
-        panorama.paste(clip2, box=(0, 0))
-        panorama.paste(clip1, box=(OUTPUT_SIZE[0] - clip_x, 0))
-
-    return panorama
+    cropped = crop_black_edge_from_image(raw, threshold=_cfg.get("black_threshold", 15))
+    base = cropped.resize(OUTPUT_SIZE)
+    final = apply_heading_adjustment(base, pano.heading)
+    return PanoramaStages(raw=raw, base=base, final=final, zoom=zoom, downloaded_tiles=downloaded)
 
 
 def download_by_pano_id(
@@ -242,9 +300,9 @@ def download_by_pano_id(
     Infers canvas size from zoom level. Tiles are 512×512 each.
     """
     if output_dir is None:
-        output_dir = _cfg["images_dir"]
-    if isinstance(output_dir, str):
-        output_dir = Path(output_dir)
+        output_dir = resolve_images_path(_cfg.get("output_dir", _cfg.get("images_dir", "pano")))
+    else:
+        output_dir = resolve_project_path(output_dir)
 
     session = get_session()
     downloader = get_downloader()

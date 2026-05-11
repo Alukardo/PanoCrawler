@@ -12,14 +12,50 @@ from typing import Tuple
 import numpy as np
 from PIL import Image
 
+from .config import cfg as _cfg
+
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
 TARGET_ASPECT_RATIO = 2.0  # 宽高比 2:1
-BOTTOM_BLACK_EDGE_RATIO = 0.05  # 底部黑边检测阈值（占图片高度的比例）
+BOTTOM_BLACK_EDGE_RATIO = _cfg.get("bottom_black_edge_ratio", 0.05)  # 底部黑边检测阈值（占图片高度的比例）
+HORIZONTAL_REDUNDANCY_MAD_THRESHOLD = _cfg.get("horizontal_redundancy_mad_threshold", 5.0)
 
 
 # ── In-memory helpers ────────────────────────────────────────────────────────
+
+def _mean_absolute_difference(left: np.ndarray, right: np.ndarray) -> float:
+    return float(np.abs(left.astype(np.float32) - right.astype(np.float32)).mean())
+
+
+def _has_horizontal_wrap_redundancy(image: np.ndarray, extra_width: int) -> bool:
+    if extra_width <= 0 or extra_width >= image.shape[1]:
+        return False
+    left = image[:, :extra_width]
+    right = image[:, -extra_width:]
+    return _mean_absolute_difference(left, right) <= HORIZONTAL_REDUNDANCY_MAD_THRESHOLD
+
+
+def _pad_height_to_aspect(image: np.ndarray) -> np.ndarray:
+    valid_h, valid_w = image.shape[:2]
+    target_h = int(round(valid_w / TARGET_ASPECT_RATIO))
+    if target_h <= valid_h:
+        return image
+    padding = np.repeat(image[-1:, :, :], target_h - valid_h, axis=0)
+    return np.concatenate([image, padding], axis=0)
+
+
+def _normalize_to_target_aspect(image: np.ndarray) -> np.ndarray:
+    valid_h, valid_w = image.shape[:2]
+    ideal_width = int(valid_h * TARGET_ASPECT_RATIO)
+    if ideal_width <= valid_w:
+        extra_width = valid_w - ideal_width
+        if _has_horizontal_wrap_redundancy(image, extra_width):
+            return image[:, :ideal_width]
+        return _pad_height_to_aspect(image)
+    ideal_height = int(valid_w / TARGET_ASPECT_RATIO)
+    return image[:ideal_height, :]
+
 
 def crop_black_edge_from_image(img: Image.Image, threshold: int = 15) -> Image.Image:
     """
@@ -46,6 +82,7 @@ def crop_black_edge_from_image(img: Image.Image, threshold: int = 15) -> Image.I
     bottom_black_height = h - valid_bottom
     if bottom_black_height > h * BOTTOM_BLACK_EDGE_RATIO:
         image = image[:valid_bottom, :]
+        image = _normalize_to_target_aspect(image)
 
     return Image.fromarray(image)
 
@@ -89,6 +126,8 @@ def detect_and_crop_black_edge(
     bottom_black_height = h - valid_bottom
     has_bottom_black_border = bottom_black_height > h * BOTTOM_BLACK_EDGE_RATIO
 
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
     if not has_bottom_black_border:
         # 无黑边，复制原图
         img.save(str(output_path))
@@ -96,21 +135,13 @@ def detect_and_crop_black_edge(
 
     # 去除底部黑边
     valid_image = image[:valid_bottom, :]
-    valid_h, valid_w = valid_image.shape[:2]
 
-    # 按 2:1 比例从左上角裁剪
-    ideal_width = int(valid_h * TARGET_ASPECT_RATIO)
-    if ideal_width <= valid_w:
-        cropped = valid_image[:, :ideal_width]
-    else:
-        ideal_height = int(valid_w / TARGET_ASPECT_RATIO)
-        cropped = valid_image[:ideal_height, :]
+    cropped = _normalize_to_target_aspect(valid_image)
 
     # 拉伸回原始分辨率
     final_img = Image.fromarray(cropped)
     final_img = final_img.resize((w, h), Image.BICUBIC)
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
     final_img.save(str(output_path))
     return True
 

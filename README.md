@@ -38,7 +38,7 @@ python3 main.py
 ```
 Panoramas/
 ├── main.py              # 全景搜索、下载和元数据写入入口
-├── process.py           # 训练配对数据生成入口
+├── build_training_pairs.py # 训练配对数据生成入口
 ├── config.yaml          # 路径、下载、处理参数
 ├── unities.py           # 兼容旧导入的几何工具包装
 ├── panorama/
