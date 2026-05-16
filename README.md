@@ -65,9 +65,20 @@ python -m integration.sequence_audit --gap-threshold-meters 50
 python -m integration.sequence_audit --json              # 机读 JSON 报告
 ```
 
-### 可视化里的序列展示
+### 可视化（Visualization）
 
-`Visualization/` 加载后，CSV 中带真实 `sequence_id` 的全景会按 sequence 自动着色并连线；旧的 `unknown` 记录仍按搜索点橙色显示。面板上的「按序列着色 + 连线」开关可临时关掉序列图层；同一 `sequence_id` 在多次刷新间颜色保持一致。
+`Visualization/app.js` 通过 `fetch()` 读取 `../runtime/info.csv` 与 `../config.yaml`，因此必须从**项目根目录**启动一个静态 HTTP 服务器（直接 `file://` 打开 `index.html` 浏览器会拦截跨源 fetch）：
+
+```bash
+# 在项目根目录运行
+python3 -m http.server 8765
+# 或使用 venv 中的 python
+.venv/bin/python -m http.server 8765
+```
+
+然后浏览器打开 `http://127.0.0.1:8765/Visualization/`。
+
+CSV 中带真实 `sequence_id` 的全景会按 sequence 自动着色并连线；旧的 `unknown` 记录仍按搜索点橙色显示。面板上的「按序列着色 + 连线」开关可临时关掉序列图层；勾选时，已被真实序列覆盖的橙色搜索点会自动淡化，避免与序列图层抢色。同一 `sequence_id` 在多次刷新间颜色保持一致。
 
 ## 项目结构
 
