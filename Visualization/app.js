@@ -172,7 +172,6 @@
       date: row.date || "",
       search_point: row.search_point || "",
       search_point_id: (row.search_point_id || LEGACY_SEARCH_POINT_ID).trim() || LEGACY_SEARCH_POINT_ID,
-      timestamp: row.timestamp || "",
       order: index,
       metadata: row
     };
@@ -567,8 +566,7 @@
       { label: "Heading", value: point.heading || "-" },
       { label: "Pitch", value: point.pitch || "-" },
       { label: "Roll", value: point.roll || "-" },
-      { label: "Search Point ID", value: idDisplay },
-      { label: "Timestamp", value: point.timestamp || "-" }
+      { label: "Search Point ID", value: idDisplay }
     ];
     return `
       <article class="download-card">

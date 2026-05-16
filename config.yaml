@@ -51,8 +51,8 @@ horizontal_redundancy_mad_threshold: 5.0
 pair_selector_mode: "all_within_distance"
 
 # ── CSV 字段 ─────────────────────────────────────────
-# 旧文件缺少 timestamp / search_point_id 时会在加载时自动补 ""/"unknown"
-fieldnames: ["pano_id", "lat", "lon", "heading", "pitch", "roll", "date", "search_point", "timestamp", "search_point_id"]
+# 旧文件缺少 search_point_id 时会在加载时自动补 "unknown"
+fieldnames: ["pano_id", "lat", "lon", "heading", "pitch", "roll", "date", "search_point", "search_point_id"]
 
 # ── Tile 下载 ─────────────────────────────────────────
 tile_timeout: 20

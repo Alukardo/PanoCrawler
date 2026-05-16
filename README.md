@@ -43,8 +43,8 @@ GOOGLE_API_KEY=你的Google_API_Key
 
 ### CSV schema
 
-`info.csv` 字段：`pano_id, lat, lon, heading, pitch, roll, date, search_point, timestamp, search_point_id`。
-旧文件缺少 `timestamp` / `search_point_id` 时，加载会自动补 `""` / `"unknown"`，下次写入即升级到新 schema。Sequence 模式记录会写入真实 `timestamp`（= `date`）和共享的 `search_point_id`（anchor pano_id，与该搜索点一一对应）。
+`info.csv` 字段：`pano_id, lat, lon, heading, pitch, roll, date, search_point, search_point_id`。
+旧文件缺少 `search_point_id` 时，加载会自动补 `"unknown"`，下次写入即升级到新 schema。Sequence 模式记录会写入共享的 `search_point_id`（anchor pano_id，与该搜索点一一对应）。
 
 ## 使用
 

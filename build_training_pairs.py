@@ -45,7 +45,6 @@ class PanoramaRecord:
     roll: float | None = None
     date: str | None = None
     search_point_id: str = LEGACY_SEARCH_POINT_ID
-    timestamp: str | None = None
 
     @classmethod
     def from_row(cls, row: dict[str, str | None]) -> "PanoramaRecord":
@@ -62,7 +61,6 @@ class PanoramaRecord:
             roll=parse_optional_float(row.get("roll")),
             date=(row.get("date") or "").strip() or None,
             search_point_id=search_point_id,
-            timestamp=(row.get("timestamp") or "").strip() or None,
         )
 
 

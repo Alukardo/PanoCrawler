@@ -129,8 +129,6 @@ def load_info_records() -> dict[str, dict]:
                     continue
                 # Older crawls (pre-sequence schema) won't have these columns;
                 # backfill so downstream code never has to None-guard them.
-                if not row.get("timestamp"):
-                    row["timestamp"] = ""
                 if not row.get("search_point_id"):
                     row["search_point_id"] = LEGACY_SEARCH_POINT_ID
                 records[row["pano_id"]] = row
@@ -149,7 +147,6 @@ def build_info_row(
     search_point: Tuple[float, float] | None = None,
     *,
     search_point_id: str = LEGACY_SEARCH_POINT_ID,
-    timestamp: str = "",
 ) -> dict:
     return {
         "pano_id": pano.pano_id,
@@ -160,7 +157,6 @@ def build_info_row(
         "roll": pano.roll,
         "date": pano.date,
         "search_point": format_search_point(search_point),
-        "timestamp": timestamp,
         "search_point_id": search_point_id,
     }
 
@@ -177,9 +173,8 @@ def download_missing_panorama(
     search_point: Tuple[float, float] | None = None,
     *,
     search_point_id: str = LEGACY_SEARCH_POINT_ID,
-    timestamp: str = "",
 ) -> bool:
-    row = build_info_row(pano, search_point, search_point_id=search_point_id, timestamp=timestamp)
+    row = build_info_row(pano, search_point, search_point_id=search_point_id)
     panoPath.mkdir(parents=True, exist_ok=True)
     img_path = panoPath / f"{pano.pano_id}.png"
     if img_path.exists():
@@ -508,7 +503,6 @@ def _walk_sequence(
                 session,
                 seed_search_point,
                 search_point_id=search_point_id,
-                timestamp=candidate.date or "",
             ):
                 added_local += 1
                 write_info_records(records)
@@ -548,7 +542,7 @@ def fetch_random_sequence_panoramas(
         * Cross-year duplicates at the same lat/lon are skipped — only the
           largest same-date group at each search point is downloaded.
         * Every record in a session shares one ``search_point_id`` (the anchor
-          pano_id) and a ``timestamp`` (= its ``date`` field).
+          pano_id).
         * When ``walk_enabled`` is true the sequence is extended by stepping
           along the road. Each step adapts to the candidate pano's own heading
           so curved paths stay tracked.
@@ -608,7 +602,6 @@ def fetch_random_sequence_panoramas(
                         session,
                         (lat, lon),
                         search_point_id=search_point_id,
-                        timestamp=pano.date or "",
                     ):
                         added += 1
                         write_info_records(records)

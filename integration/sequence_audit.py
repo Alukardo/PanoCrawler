@@ -36,7 +36,6 @@ class SequenceMember:
     lon: float
     heading: float | None
     date: str
-    timestamp: str
     order: int
 
 
@@ -45,7 +44,6 @@ class SequenceReport:
     search_point_id: str
     members: list[SequenceMember] = field(default_factory=list)
     date: str = ""
-    timestamp: str = ""
 
     @property
     def length(self) -> int:
@@ -97,15 +95,12 @@ def load_sequences(csv_path: Path) -> dict[str, SequenceReport]:
                 lon=lon,
                 heading=heading,
                 date=(row.get("date") or "").strip(),
-                timestamp=(row.get("timestamp") or "").strip(),
                 order=idx,
             )
             report = sequences.setdefault(search_point_id, SequenceReport(search_point_id=search_point_id))
             report.members.append(member)
             if not report.date and member.date:
                 report.date = member.date
-            if not report.timestamp and member.timestamp:
-                report.timestamp = member.timestamp
     return sequences
 
 
@@ -140,7 +135,6 @@ def summarize_sequence(report: SequenceReport, gap_threshold_m: float) -> dict:
         "search_point_id": report.search_point_id,
         "length": report.length,
         "date": report.date,
-        "timestamp": report.timestamp,
         "step_count": len(distances),
         "mean_step_m": sum(distances) / len(distances) if distances else 0.0,
         "median_step_m": sorted(distances)[len(distances) // 2] if distances else 0.0,
