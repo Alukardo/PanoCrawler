@@ -32,7 +32,7 @@ LABEL_DIR = OUT_DIR / "train_cond"
 DISTANCE_THRESHOLD = _cfg["distance_threshold"]  # default 1e-8 ≈ 11m at equator
 
 
-LEGACY_SEQUENCE_ID = "unknown"
+LEGACY_SEARCH_POINT_ID = "unknown"
 
 
 @dataclass(frozen=True)
@@ -44,7 +44,7 @@ class PanoramaRecord:
     pitch: float | None = None
     roll: float | None = None
     date: str | None = None
-    sequence_id: str = LEGACY_SEQUENCE_ID
+    search_point_id: str = LEGACY_SEARCH_POINT_ID
     timestamp: str | None = None
 
     @classmethod
@@ -52,7 +52,7 @@ class PanoramaRecord:
         pano_id = (row["pano_id"] or "").strip()
         if not pano_id:
             raise ValueError("missing pano_id")
-        sequence_id = (row.get("sequence_id") or LEGACY_SEQUENCE_ID).strip() or LEGACY_SEQUENCE_ID
+        search_point_id = (row.get("search_point_id") or LEGACY_SEARCH_POINT_ID).strip() or LEGACY_SEARCH_POINT_ID
         return cls(
             pano_id=pano_id,
             lat=float((row["lat"] or "").strip()),
@@ -61,7 +61,7 @@ class PanoramaRecord:
             pitch=parse_optional_float(row.get("pitch")),
             roll=parse_optional_float(row.get("roll")),
             date=(row.get("date") or "").strip() or None,
-            sequence_id=sequence_id,
+            search_point_id=search_point_id,
             timestamp=(row.get("timestamp") or "").strip() or None,
         )
 
@@ -106,17 +106,17 @@ class AllPairsWithinDistance:
 
 
 class SameSequencePairSelector:
-    """Yield all pairs that share a real ``sequence_id``.
+    """Yield all pairs that share a real ``search_point_id``.
 
     Sequence-aware crawl groups panoramas captured in the same session under a
-    shared ``sequence_id``. Pairs drawn from the same group have:
+    shared ``search_point_id``. Pairs drawn from the same group have:
 
     * identical lighting / weather (same drive),
     * identical camera rig (same calibration),
     * known temporal ordering,
 
     which makes them ideal positive samples for view-synthesis or NeRF-style
-    training. Legacy rows (``sequence_id == "unknown"``) are excluded since
+    training. Legacy rows (``search_point_id == "unknown"``) are excluded since
     we cannot guarantee same-session capture.
 
     An optional ``distance_metric`` can further filter to nearby pairs only;
@@ -129,8 +129,8 @@ class SameSequencePairSelector:
     def select(self, records: Sequence[PanoramaRecord]) -> Iterable[tuple[PanoramaRecord, PanoramaRecord]]:
         groups: dict[str, list[PanoramaRecord]] = {}
         for record in records:
-            sid = record.sequence_id or LEGACY_SEQUENCE_ID
-            if sid == LEGACY_SEQUENCE_ID:
+            sid = record.search_point_id or LEGACY_SEARCH_POINT_ID
+            if sid == LEGACY_SEARCH_POINT_ID:
                 continue
             groups.setdefault(sid, []).append(record)
 

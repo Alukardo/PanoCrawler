@@ -670,7 +670,7 @@ class TestFetchPanoramas:
                 "date": "2022-05",
                 "search_point": "[25.000000, 121.500000]",
                 "timestamp": "",
-                "sequence_id": main.LEGACY_SEQUENCE_ID,
+                "search_point_id": main.LEGACY_SEARCH_POINT_ID,
             },
             {
                 "pano_id": "new",
@@ -682,7 +682,7 @@ class TestFetchPanoramas:
                 "date": "2023-07",
                 "search_point": "[25.000000, 121.500000]",
                 "timestamp": "",
-                "sequence_id": main.LEGACY_SEQUENCE_ID,
+                "search_point_id": main.LEGACY_SEARCH_POINT_ID,
             },
         ]
         assert len(downloaded) == 1
@@ -1012,12 +1012,12 @@ class TestSchemaMigration:
 
         assert "old" in records
         assert records["old"]["timestamp"] == ""
-        assert records["old"]["sequence_id"] == main.LEGACY_SEQUENCE_ID
+        assert records["old"]["search_point_id"] == main.LEGACY_SEARCH_POINT_ID
 
     def test_load_info_records_preserves_existing_sequence_fields(self, tmp_path, monkeypatch):
         info_file = tmp_path / "info.csv"
         info_file.write_text(
-            "pano_id,lat,lon,heading,pitch,roll,date,search_point,timestamp,sequence_id\n"
+            "pano_id,lat,lon,heading,pitch,roll,date,search_point,timestamp,search_point_id\n"
             "seq,1.0,2.0,90.0,0.0,0.0,2023-04,,2023-04,anchor_pano\n",
             encoding="utf-8",
         )
@@ -1026,7 +1026,7 @@ class TestSchemaMigration:
         records = main.load_info_records()
 
         assert records["seq"]["timestamp"] == "2023-04"
-        assert records["seq"]["sequence_id"] == "anchor_pano"
+        assert records["seq"]["search_point_id"] == "anchor_pano"
 
     def test_legacy_csv_round_trip_persists_backfilled_fields(self, tmp_path, monkeypatch):
         info_file = tmp_path / "info.csv"
@@ -1045,7 +1045,7 @@ class TestSchemaMigration:
 
         rewritten = list(main.csv.DictReader(info_file.open(encoding="utf-8")))
         assert rewritten[0]["timestamp"] == ""
-        assert rewritten[0]["sequence_id"] == main.LEGACY_SEQUENCE_ID
+        assert rewritten[0]["search_point_id"] == main.LEGACY_SEARCH_POINT_ID
         assert rewritten[0]["date"] == "2020-01"
 
 
@@ -1184,7 +1184,7 @@ class TestSequenceCrawl:
         added = main._walk_sequence(
             anchor=anchor,
             initial_heading=0.0,
-            sequence_id="anchor",
+            search_point_id="anchor",
             records={},
             session=None,
             seed_search_point=(0.0, 0.0),
@@ -1252,7 +1252,7 @@ class TestSequenceCrawl:
         assert downloaded == ["anchor", "follower"]
         rows = list(main.csv.DictReader(info_file.open(encoding="utf-8")))
         assert [row["pano_id"] for row in rows] == ["anchor", "follower"]
-        assert all(row["sequence_id"] == "anchor" for row in rows)
+        assert all(row["search_point_id"] == "anchor" for row in rows)
         assert all(row["timestamp"] == "2023-04" for row in rows)
 
     def test_fetch_random_sequence_walks_along_heading_when_enabled(self, tmp_path, monkeypatch):
@@ -1307,7 +1307,7 @@ class TestSequenceCrawl:
         assert len(search_calls) == 4
         rows = list(main.csv.DictReader(info_file.open(encoding="utf-8")))
         assert [row["pano_id"] for row in rows] == ["anchor", "walk1", "walk2"]
-        assert {row["sequence_id"] for row in rows} == {"anchor"}
+        assert {row["search_point_id"] for row in rows} == {"anchor"}
 
     def test_fetch_random_sequence_walk_follows_candidate_heading_on_curves(self, tmp_path, monkeypatch):
         """Each step must use the candidate's own heading, not the anchor's."""
@@ -1408,7 +1408,7 @@ class TestSequenceCrawl:
         assert added == 4  # anchor + fwd1 + bwd1 + bwd2
         rows = list(main.csv.DictReader(info_file.open(encoding="utf-8")))
         assert [row["pano_id"] for row in rows] == ["anchor", "fwd1", "bwd1", "bwd2"]
-        assert {row["sequence_id"] for row in rows} == {"anchor"}
+        assert {row["search_point_id"] for row in rows} == {"anchor"}
         # First walk goes north (positive lat), backward walk goes south (negative lat).
         fwd_step = search_calls[1]
         bwd_step = search_calls[3]
@@ -1682,14 +1682,14 @@ class TestSequenceAudit:
                 writer.writerow(full)
         return info_file
 
-    def test_audit_groups_by_sequence_id_and_marks_contiguous(self, tmp_path):
+    def test_audit_groups_by_search_point_id_and_marks_contiguous(self, tmp_path):
         info_file = self._make_info_csv(
             tmp_path,
             [
                 # 8m apart north — well under default 30m gap threshold.
-                {"pano_id": "a", "lat": "0.0", "lon": "0.0", "heading": "0.0", "date": "2023-04", "timestamp": "2023-04", "sequence_id": "a"},
-                {"pano_id": "b", "lat": "0.0000719", "lon": "0.0", "heading": "0.0", "date": "2023-04", "timestamp": "2023-04", "sequence_id": "a"},
-                {"pano_id": "c", "lat": "0.0001438", "lon": "0.0", "heading": "0.0", "date": "2023-04", "timestamp": "2023-04", "sequence_id": "a"},
+                {"pano_id": "a", "lat": "0.0", "lon": "0.0", "heading": "0.0", "date": "2023-04", "timestamp": "2023-04", "search_point_id": "a"},
+                {"pano_id": "b", "lat": "0.0000719", "lon": "0.0", "heading": "0.0", "date": "2023-04", "timestamp": "2023-04", "search_point_id": "a"},
+                {"pano_id": "c", "lat": "0.0001438", "lon": "0.0", "heading": "0.0", "date": "2023-04", "timestamp": "2023-04", "search_point_id": "a"},
             ],
         )
         report = sequence_audit.run_audit(info_file)
@@ -1709,11 +1709,11 @@ class TestSequenceAudit:
         info_file = self._make_info_csv(
             tmp_path,
             [
-                {"pano_id": "a", "lat": "0.0", "lon": "0.0", "heading": "0.0", "date": "2023-04", "timestamp": "2023-04", "sequence_id": "seq1"},
+                {"pano_id": "a", "lat": "0.0", "lon": "0.0", "heading": "0.0", "date": "2023-04", "timestamp": "2023-04", "search_point_id": "seq1"},
                 # 8m
-                {"pano_id": "b", "lat": "0.0000719", "lon": "0.0", "heading": "0.0", "date": "2023-04", "timestamp": "2023-04", "sequence_id": "seq1"},
+                {"pano_id": "b", "lat": "0.0000719", "lon": "0.0", "heading": "0.0", "date": "2023-04", "timestamp": "2023-04", "search_point_id": "seq1"},
                 # >100m jump (~111m at equator for 0.001 deg of latitude)
-                {"pano_id": "c", "lat": "0.001", "lon": "0.0", "heading": "0.0", "date": "2023-04", "timestamp": "2023-04", "sequence_id": "seq1"},
+                {"pano_id": "c", "lat": "0.001", "lon": "0.0", "heading": "0.0", "date": "2023-04", "timestamp": "2023-04", "search_point_id": "seq1"},
             ],
         )
         report = sequence_audit.run_audit(info_file, gap_threshold_m=30.0)
@@ -1727,24 +1727,24 @@ class TestSequenceAudit:
         info_file = self._make_info_csv(
             tmp_path,
             [
-                {"pano_id": "legacy1", "lat": "0.0", "lon": "0.0", "heading": "0.0", "date": "2020-01", "timestamp": "", "sequence_id": "unknown"},
-                {"pano_id": "legacy2", "lat": "1.0", "lon": "1.0", "heading": "0.0", "date": "2020-01", "timestamp": "", "sequence_id": "unknown"},
-                {"pano_id": "real", "lat": "5.0", "lon": "5.0", "heading": "0.0", "date": "2023-04", "timestamp": "2023-04", "sequence_id": "real"},
+                {"pano_id": "legacy1", "lat": "0.0", "lon": "0.0", "heading": "0.0", "date": "2020-01", "timestamp": "", "search_point_id": "unknown"},
+                {"pano_id": "legacy2", "lat": "1.0", "lon": "1.0", "heading": "0.0", "date": "2020-01", "timestamp": "", "search_point_id": "unknown"},
+                {"pano_id": "real", "lat": "5.0", "lon": "5.0", "heading": "0.0", "date": "2023-04", "timestamp": "2023-04", "search_point_id": "real"},
             ],
         )
         report = sequence_audit.run_audit(info_file)
         assert report["totals"]["sequences"] == 1  # only "real" is a real sequence
         assert report["totals"]["panoramas_in_sequences"] == 1
         assert report["totals"]["panoramas_unknown"] == 2
-        assert {s["sequence_id"] for s in report["sequences"]} == {"real"}
+        assert {s["search_point_id"] for s in report["sequences"]} == {"real"}
         assert report["totals"]["singleton_sequences"] == 1
 
     def test_audit_text_report_lists_each_sequence(self, tmp_path):
         info_file = self._make_info_csv(
             tmp_path,
             [
-                {"pano_id": "a", "lat": "0.0", "lon": "0.0", "heading": "0.0", "date": "2023-04", "timestamp": "2023-04", "sequence_id": "seqA"},
-                {"pano_id": "b", "lat": "0.0000719", "lon": "0.0", "heading": "0.0", "date": "2023-04", "timestamp": "2023-04", "sequence_id": "seqA"},
+                {"pano_id": "a", "lat": "0.0", "lon": "0.0", "heading": "0.0", "date": "2023-04", "timestamp": "2023-04", "search_point_id": "seqA"},
+                {"pano_id": "b", "lat": "0.0000719", "lon": "0.0", "heading": "0.0", "date": "2023-04", "timestamp": "2023-04", "search_point_id": "seqA"},
             ],
         )
         report = sequence_audit.run_audit(info_file)
@@ -1757,7 +1757,7 @@ class TestSequenceAudit:
         info_file = self._make_info_csv(
             tmp_path,
             [
-                {"pano_id": "a", "lat": "0.0", "lon": "0.0", "heading": "0.0", "date": "2023-04", "timestamp": "2023-04", "sequence_id": "seq"},
+                {"pano_id": "a", "lat": "0.0", "lon": "0.0", "heading": "0.0", "date": "2023-04", "timestamp": "2023-04", "search_point_id": "seq"},
             ],
         )
         rc = sequence_audit.main(["--input", str(info_file), "--json"])
@@ -1920,18 +1920,18 @@ class TestProcessData:
 class TestSameSequencePairSelector:
     """Sequence-aware training pair selection."""
 
-    def _record(self, pano_id: str, lat: float, lon: float, sequence_id: str = "seqA") -> "training_pairs_module.PanoramaRecord":
+    def _record(self, pano_id: str, lat: float, lon: float, search_point_id: str = "seqA") -> "training_pairs_module.PanoramaRecord":
         return training_pairs_module.PanoramaRecord(
-            pano_id=pano_id, lat=lat, lon=lon, sequence_id=sequence_id,
+            pano_id=pano_id, lat=lat, lon=lon, search_point_id=search_point_id,
         )
 
     def test_same_sequence_yields_only_intra_group_pairs(self):
         records = [
-            self._record("a1", 0.0, 0.0, sequence_id="seqA"),
-            self._record("a2", 0.0, 0.0001, sequence_id="seqA"),
-            self._record("b1", 10.0, 10.0, sequence_id="seqB"),
-            self._record("b2", 10.0, 10.0001, sequence_id="seqB"),
-            self._record("legacy", 5.0, 5.0, sequence_id="unknown"),
+            self._record("a1", 0.0, 0.0, search_point_id="seqA"),
+            self._record("a2", 0.0, 0.0001, search_point_id="seqA"),
+            self._record("b1", 10.0, 10.0, search_point_id="seqB"),
+            self._record("b2", 10.0, 10.0001, search_point_id="seqB"),
+            self._record("legacy", 5.0, 5.0, search_point_id="unknown"),
         ]
         selector = training_pairs_module.SameSequencePairSelector()
         pairs = list(selector.select(records))
@@ -1946,9 +1946,9 @@ class TestSameSequencePairSelector:
 
     def test_same_sequence_skips_singletons(self):
         records = [
-            self._record("solo", 0.0, 0.0, sequence_id="lonely"),
-            self._record("a1", 1.0, 1.0, sequence_id="seqA"),
-            self._record("a2", 1.0, 1.0001, sequence_id="seqA"),
+            self._record("solo", 0.0, 0.0, search_point_id="lonely"),
+            self._record("a1", 1.0, 1.0, search_point_id="seqA"),
+            self._record("a2", 1.0, 1.0001, search_point_id="seqA"),
         ]
         selector = training_pairs_module.SameSequencePairSelector()
         pairs = list(selector.select(records))
@@ -1958,9 +1958,9 @@ class TestSameSequencePairSelector:
 
     def test_same_sequence_with_distance_filter_drops_far_pairs(self):
         records = [
-            self._record("near1", 0.0, 0.0, sequence_id="seqA"),
-            self._record("near2", 0.0, 1e-6, sequence_id="seqA"),
-            self._record("far", 10.0, 10.0, sequence_id="seqA"),
+            self._record("near1", 0.0, 0.0, search_point_id="seqA"),
+            self._record("near2", 0.0, 1e-6, search_point_id="seqA"),
+            self._record("far", 10.0, 10.0, search_point_id="seqA"),
         ]
         metric = training_pairs_module.SquaredDegreeDistance(1e-8)
         selector = training_pairs_module.SameSequencePairSelector(distance_metric=metric)
@@ -1987,19 +1987,19 @@ class TestSameSequencePairSelector:
         with pytest.raises(ValueError, match="Unknown pair_selector_mode"):
             training_pairs_module.make_pair_selector("bogus", metric)
 
-    def test_load_records_round_trips_sequence_id(self, tmp_path):
+    def test_load_records_round_trips_search_point_id(self, tmp_path):
         metadata_path = tmp_path / "info.csv"
         metadata_path.write_text(
-            "pano_id,lat,lon,heading,pitch,roll,date,search_point,timestamp,sequence_id\n"
+            "pano_id,lat,lon,heading,pitch,roll,date,search_point,timestamp,search_point_id\n"
             "a,1.0,2.0,90.0,0.0,0.0,2023-04,,2023-04,anchor\n"
             "legacy,3.0,4.0,90.0,0.0,0.0,2020-01,,,\n",
             encoding="utf-8",
         )
         records = training_pairs_module.load_records(metadata_path)
         by_id = {r.pano_id: r for r in records}
-        assert by_id["a"].sequence_id == "anchor"
+        assert by_id["a"].search_point_id == "anchor"
         assert by_id["a"].timestamp == "2023-04"
-        assert by_id["legacy"].sequence_id == training_pairs_module.LEGACY_SEQUENCE_ID
+        assert by_id["legacy"].search_point_id == training_pairs_module.LEGACY_SEARCH_POINT_ID
         assert by_id["legacy"].timestamp is None
 
     def test_build_training_pairs_honors_pair_selector_mode_config(self, tmp_path, monkeypatch):
@@ -2013,7 +2013,7 @@ class TestSameSequencePairSelector:
             (source_dir / f"{name}.png").write_bytes(name.encode())
         metadata_path = source_dir / "info.csv"
         metadata_path.write_text(
-            "pano_id,lat,lon,heading,pitch,roll,date,search_point,timestamp,sequence_id\n"
+            "pano_id,lat,lon,heading,pitch,roll,date,search_point,timestamp,search_point_id\n"
             "a1,1.0,2.0,90.0,0.0,0.0,2023-04,,2023-04,seqA\n"
             "a2,1.0,2.0,90.0,0.0,0.0,2023-04,,2023-04,seqA\n"
             "b1,1.0,2.0,90.0,0.0,0.0,2020-01,,,unknown\n",

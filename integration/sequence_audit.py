@@ -1,6 +1,6 @@
 """Diagnostic CLI for sequence-aware panorama metadata.
 
-Groups ``info.csv`` rows by ``sequence_id``, sorts each group by capture order
+Groups ``info.csv`` rows by ``search_point_id``, sorts each group by capture order
 (falling back to lat/lon-based nearest-neighbor when order is missing), reports
 contiguity stats, and flags suspicious gaps so you can decide whether to keep
 or rebuild a sequence.
@@ -24,7 +24,7 @@ from typing import Iterable
 
 from panorama.config import cfg as _cfg, resolve_images_path
 
-LEGACY_SEQUENCE_ID = "unknown"
+LEGACY_SEARCH_POINT_ID = "unknown"
 EARTH_RADIUS_METERS = 6_371_000.0
 DEFAULT_GAP_THRESHOLD_METERS = 30.0
 
@@ -42,7 +42,7 @@ class SequenceMember:
 
 @dataclass
 class SequenceReport:
-    sequence_id: str
+    search_point_id: str
     members: list[SequenceMember] = field(default_factory=list)
     date: str = ""
     timestamp: str = ""
@@ -67,7 +67,7 @@ def haversine_meters(a_lat: float, a_lon: float, b_lat: float, b_lon: float) -> 
 
 
 def load_sequences(csv_path: Path) -> dict[str, SequenceReport]:
-    """Read ``info.csv`` and group rows by ``sequence_id``.
+    """Read ``info.csv`` and group rows by ``search_point_id``.
 
     Each member's ``order`` is its row position so we can reconstruct walk
     order (sequence mode emits members in the order they were downloaded).
@@ -79,7 +79,7 @@ def load_sequences(csv_path: Path) -> dict[str, SequenceReport]:
             pano_id = (row.get("pano_id") or "").strip()
             if not pano_id:
                 continue
-            sequence_id = (row.get("sequence_id") or LEGACY_SEQUENCE_ID).strip() or LEGACY_SEQUENCE_ID
+            search_point_id = (row.get("search_point_id") or LEGACY_SEARCH_POINT_ID).strip() or LEGACY_SEARCH_POINT_ID
             try:
                 lat = float(row["lat"])
                 lon = float(row["lon"])
@@ -100,7 +100,7 @@ def load_sequences(csv_path: Path) -> dict[str, SequenceReport]:
                 timestamp=(row.get("timestamp") or "").strip(),
                 order=idx,
             )
-            report = sequences.setdefault(sequence_id, SequenceReport(sequence_id=sequence_id))
+            report = sequences.setdefault(search_point_id, SequenceReport(search_point_id=search_point_id))
             report.members.append(member)
             if not report.date and member.date:
                 report.date = member.date
@@ -137,7 +137,7 @@ def summarize_sequence(report: SequenceReport, gap_threshold_m: float) -> dict:
     }
     gap_count = sum(1 for d in distances if d > gap_threshold_m)
     return {
-        "sequence_id": report.sequence_id,
+        "search_point_id": report.search_point_id,
         "length": report.length,
         "date": report.date,
         "timestamp": report.timestamp,
@@ -158,11 +158,11 @@ def build_report(
     gap_threshold_m: float,
 ) -> dict:
     """Aggregate per-sequence summaries plus global counts."""
-    real = {sid: rep for sid, rep in sequences.items() if sid != LEGACY_SEQUENCE_ID}
-    unknown = sequences.get(LEGACY_SEQUENCE_ID)
+    real = {sid: rep for sid, rep in sequences.items() if sid != LEGACY_SEARCH_POINT_ID}
+    unknown = sequences.get(LEGACY_SEARCH_POINT_ID)
 
     summaries = [summarize_sequence(rep, gap_threshold_m) for rep in real.values()]
-    summaries.sort(key=lambda s: (-s["length"], s["sequence_id"]))
+    summaries.sort(key=lambda s: (-s["length"], s["search_point_id"]))
 
     real_panos = sum(s["length"] for s in summaries)
     contiguous = sum(1 for s in summaries if s["is_contiguous"])
@@ -195,15 +195,15 @@ def format_text_report(report: dict) -> str:
         f"  with gaps         : {totals['gapped_sequences']}",
         f"  singletons        : {totals['singleton_sequences']}",
         f"Panoramas in seq.   : {totals['panoramas_in_sequences']}",
-        f"Panoramas legacy    : {totals['panoramas_unknown']} (sequence_id='{LEGACY_SEQUENCE_ID}')",
+        f"Panoramas legacy    : {totals['panoramas_unknown']} (search_point_id='{LEGACY_SEARCH_POINT_ID}')",
         "",
-        f"{'sequence_id':32s} {'len':>4s} {'date':>8s} {'mean_m':>8s} {'max_m':>8s} {'gaps':>5s}  status",
+        f"{'search_point_id':32s} {'len':>4s} {'date':>8s} {'mean_m':>8s} {'max_m':>8s} {'gaps':>5s}  status",
         "-" * 78,
     ]
     for s in report["sequences"]:
         status = "OK" if s["is_contiguous"] else ("SINGLE" if s["length"] == 1 else "GAPPED")
         lines.append(
-            f"{s['sequence_id'][:32]:32s} "
+            f"{s['search_point_id'][:32]:32s} "
             f"{s['length']:>4d} "
             f"{(s['date'] or '-'):>8s} "
             f"{s['mean_step_m']:>8.1f} "
@@ -224,7 +224,7 @@ def run_audit(
 
 
 def main(argv: Iterable[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Audit sequence_id grouping in panorama info.csv")
+    parser = argparse.ArgumentParser(description="Audit search_point_id grouping in panorama info.csv")
     parser.add_argument(
         "--input",
         type=Path,

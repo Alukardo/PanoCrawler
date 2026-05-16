@@ -9,7 +9,6 @@
     loadConfiguredData: document.getElementById("loadConfiguredData"),
     clearData: document.getElementById("clearData"),
     themeToggle: document.getElementById("themeToggle"),
-    toggleSequences: document.getElementById("toggleSequences"),
     downloadCount: document.getElementById("downloadCount"),
     visibleCount: document.getElementById("visibleCount"),
     statusText: document.getElementById("statusText"),
@@ -26,8 +25,7 @@
   const PROJECT_IMAGES_METADATA_URL = "../images/info.csv";
   const SEARCH_POINT_COLOR = "#ff9f0a";
   const POINT_HOVER_COLOR = "#ffd166";
-  const LEGACY_SEQUENCE_ID = "unknown";
-  const LEGACY_SEQUENCE_COLOR = SEARCH_POINT_COLOR;
+  const LEGACY_SEARCH_POINT_ID = "unknown";
   const CAMERA_MOVE_MS = 1800;
   const DEFAULT_CAMERA_DISTANCE = 160;
   const FOCUS_CAMERA_DISTANCE = 150;
@@ -36,9 +34,6 @@
     records: [],
     points: [],
     searchPoints: [],
-    sequences: [],            // [{id, color, points: [pano,...]}]
-    sequenceColorById: new Map(),
-    sequencesEnabled: true,
     config: null,
     selected: null,
     cameraTarget: null,
@@ -176,53 +171,11 @@
       roll: row.roll || "",
       date: row.date || "",
       search_point: row.search_point || "",
-      sequence_id: (row.sequence_id || LEGACY_SEQUENCE_ID).trim() || LEGACY_SEQUENCE_ID,
+      search_point_id: (row.search_point_id || LEGACY_SEARCH_POINT_ID).trim() || LEGACY_SEARCH_POINT_ID,
       timestamp: row.timestamp || "",
       order: index,
       metadata: row
     };
-  }
-
-  // Deterministic 32-bit hash so the same sequence_id always lands on the same
-  // hue across reloads — important for visual continuity when you reopen the
-  // page after another crawl run.
-  function hashString(str) {
-    let h = 2166136261;
-    for (let i = 0; i < str.length; i += 1) {
-      h ^= str.charCodeAt(i);
-      h = (h * 16777619) >>> 0;
-    }
-    return h;
-  }
-
-  function colorForSequence(sequenceId) {
-    if (!sequenceId || sequenceId === LEGACY_SEQUENCE_ID) {
-      return LEGACY_SEQUENCE_COLOR;
-    }
-    if (state.sequenceColorById.has(sequenceId)) {
-      return state.sequenceColorById.get(sequenceId);
-    }
-    const hue = hashString(sequenceId) % 360;
-    // Saturated, high-luma palette → readable on dark globe yet not blown out.
-    const color = `hsl(${hue}, 78%, 62%)`;
-    state.sequenceColorById.set(sequenceId, color);
-    return color;
-  }
-
-  function buildSequences(points) {
-    const groups = new Map();
-    for (const point of points) {
-      const sid = point.sequence_id;
-      if (!sid || sid === LEGACY_SEQUENCE_ID) continue;
-      let group = groups.get(sid);
-      if (!group) {
-        group = { id: sid, color: colorForSequence(sid), points: [] };
-        groups.set(sid, group);
-      }
-      group.points.push(point);
-    }
-    // Preserve walk order: points were sorted by `order` already in updateData.
-    return Array.from(groups.values());
   }
 
   function parseSearchPoint(value) {
@@ -252,19 +205,22 @@
           lat: coord.lat,
           lon: coord.lon,
           search_point: `[${coord.lat.toFixed(6)}, ${coord.lon.toFixed(6)}]`,
+          // search_point_id 与 search_point 1-1，全体 downloads 共享。
+          // 取首个非 legacy 值作为 group 身份。
+          search_point_id: (point.search_point_id && point.search_point_id !== LEGACY_SEARCH_POINT_ID)
+            ? point.search_point_id
+            : LEGACY_SEARCH_POINT_ID,
           downloads: [],
-          order: point.order,
-          hasRealSequence: false
+          order: point.order
         };
         groups.set(key, group);
+      } else if (group.search_point_id === LEGACY_SEARCH_POINT_ID
+        && point.search_point_id && point.search_point_id !== LEGACY_SEARCH_POINT_ID) {
+        // 升级 legacy 点: 后续遇到带真实 id 的 pano 就接手。
+        group.search_point_id = point.search_point_id;
       }
       group.downloads.push(point);
       group.order = Math.min(group.order, point.order);
-      // 一个搜索点只要含至少一个真实 sequence_id 的 pano,就标记为"被序列覆盖"。
-      // 渲染时这种点会让位给上层的彩色序列点,避免和橙色搜索点视觉打架。
-      if (point.sequence_id && point.sequence_id !== LEGACY_SEQUENCE_ID) {
-        group.hasRealSequence = true;
-      }
     }
     // 1-based displayIndex is human-friendly ("#3") and stable across reloads
     // because the sort key (earliest CSV row) is deterministic.
@@ -279,7 +235,6 @@
       return a.order - b.order;
     });
     state.searchPoints = buildSearchPoints(state.points);
-    state.sequences = buildSequences(state.points);
     state.selected = null;
     state.cameraTarget = null;
     stopCameraAnimation();
@@ -353,17 +308,7 @@
     state.cameraAnimationId = requestAnimationFrame(tick);
   }
 
-  function searchPointStyle(dimmed) {
-    if (dimmed) {
-      // 序列点会盖在同一位置,所以这里把橙色搜索点降到几乎隐形的背景层。
-      // 仍保留 opacity > 0 + 微弱描边,这样 hit-test 仍能命中,click/hover 行为不丢。
-      return {
-        color: SEARCH_POINT_COLOR,
-        opacity: 0.15,
-        borderWidth: 0.01,
-        borderColor: "rgba(255,255,255,0.4)"
-      };
-    }
+  function searchPointStyle() {
     return {
       color: SEARCH_POINT_COLOR,
       opacity: 1,
@@ -373,13 +318,10 @@
   }
 
   function dataItem(point, index, kind) {
-    // 只在 sequence toggle 开启 AND 这个搜索点被真实序列覆盖时,才退到淡色背景层;
-    // 关闭 toggle 或 legacy (unknown) 数据 → 完整显示橙色搜索点。
-    const dimmed = state.sequencesEnabled && point.hasRealSequence;
     return {
       name: "搜索点",
       value: [Number(point.lon), Number(point.lat)],
-      itemStyle: searchPointStyle(dimmed),
+      itemStyle: searchPointStyle(),
       searchKey: point.key,
       searchIndex: index,
       downloadCount: Array.isArray(point.downloads) ? point.downloads.length : 0,
@@ -390,12 +332,6 @@
   function pointFromParams(params) {
     if (!params) return null;
     const data = params.data || {};
-    // Sequence points carry their owning search anchor's key — resolve through
-    // it so click + detail panel show the full search-point context, not the
-    // single download point.
-    if (data.kind === "sequence-point" && data.searchKey) {
-      return state.searchPoints.find(point => point.key === data.searchKey) || null;
-    }
     if (data.raw) return data.raw;
     const index = Number(data.searchIndex ?? params.dataIndex);
     if (Number.isInteger(index) && index >= 0) {
@@ -497,77 +433,15 @@
     return `${coord.lat.toFixed(6)},${coord.lon.toFixed(6)}`;
   }
 
-  function buildSequenceSeries() {
-    if (!state.sequencesEnabled || !state.sequences.length) return [];
-    const sequenceScatter = state.sequences.flatMap(seq => seq.points).map(point => ({
-      name: "序列点",
-      value: [Number(point.lon), Number(point.lat)],
-      itemStyle: { color: colorForSequence(point.sequence_id), opacity: 1 },
-      raw: point,
-      // Pre-compute the search anchor key so click handlers can resolve the
-      // owning search point without re-deriving it; tooltips show single-pano
-      // info instead of the (wrong) aggregate "downloads" count.
-      searchKey: searchKeyForDownload(point),
-      kind: "sequence-point"
-    }));
-    // One polyline per sequence so colors stay distinct even when two
-    // sequences happen to lie near each other.
-    const sequenceLines = state.sequences
-      .filter(seq => seq.points.length >= 2)
-      .map((seq, idx) => ({
-        id: `sequence-line-${idx}`,
-        name: `序列 ${seq.id}`,
-        type: "lines3D",
-        coordinateSystem: "globe",
-        effect: { show: false },
-        blendMode: "source-over",
-        lineStyle: {
-          color: seq.color,
-          width: 1.6,
-          opacity: 0.85
-        },
-        silent: true,
-        data: [
-          {
-            coords: seq.points.map(p => [Number(p.lon), Number(p.lat)])
-          }
-        ]
-      }));
-    return [
-      {
-        id: "sequence-points",
-        name: "序列点",
-        type: "scatter3D",
-        coordinateSystem: "globe",
-        blendMode: "source-over",
-        shading: "color",
-        dimensions: ["lon", "lat"],
-        silent: false,
-        animation: false,
-        animationDurationUpdate: 0,
-        symbolSize: 4.4,
-        data: sequenceScatter,
-        label: { show: false },
-        emphasis: {
-          itemStyle: { borderWidth: 0.8, borderColor: "#fff" },
-          label: { show: false }
-        }
-      },
-      ...sequenceLines
-    ];
-  }
-
   function renderGlobe(options = {}) {
     const points = visiblePoints();
-    const baseSeries = [
+    const series = [
       {
         id: "search-points",
         name: "搜索点",
         type: "scatter3D",
         coordinateSystem: "globe",
-        // blendMode "lighter" 在 dimmed 点重叠时会越叠越亮,抵消 dim 效果。
-        // sequences toggle 开启时改用 "source-over" 让背景层保持安静。
-        blendMode: state.sequencesEnabled ? "source-over" : "lighter",
+        blendMode: "lighter",
         shading: "color",
         dimensions: ["lon", "lat"],
         silent: false,
@@ -575,7 +449,7 @@
         animationDurationUpdate: 0,
         symbolSize: 5.6,
         data: points.map((point, index) => dataItem(point, index, "search")),
-        itemStyle: searchPointStyle(false),
+        itemStyle: searchPointStyle(),
         label: {
           show: false
         },
@@ -596,10 +470,8 @@
         }
       }
     ];
-    const series = baseSeries.concat(buildSequenceSeries());
     if (options.reset || !state.optionReady) {
-      // Full rewrite — used on initial load and when sequence toggle changes
-      // (so disabled-sequence series get cleared instead of merging back in).
+      // Full rewrite — used on initial load to seed the globe + series.
       chart.setOption(baseOption(series), true);
       state.optionReady = true;
     } else {
@@ -611,71 +483,25 @@
     elements.visibleCount.textContent = String(points.length);
   }
 
-  function tooltipForSequencePoint(downloadPoint) {
-    // Sequence points represent a single pano, not the aggregate search anchor.
-    // Show pano-specific identifiers so hovering over a colored sequence dot
-    // surfaces useful info (sequence_id / date / pano_id) instead of the
-    // misleading "downloads = 0" count from the search-point template.
-    const sequenceId = downloadPoint.sequence_id && downloadPoint.sequence_id !== LEGACY_SEQUENCE_ID
-      ? downloadPoint.sequence_id
-      : "—";
-    const date = downloadPoint.date || "—";
-    const location = `${formatCoord(downloadPoint.lat)}, ${formatCoord(downloadPoint.lon)}`;
-    // Resolve the owning search anchor so users see which "#N" search point
-    // this sequence point belongs to — useful when several sequences cluster.
-    const searchKey = searchKeyForDownload(downloadPoint);
-    const owner = state.searchPoints.find(p => p.key === searchKey);
-    const ownerLabel = owner && Number.isInteger(owner.displayIndex)
-      ? `#${owner.displayIndex}`
-      : "—";
-    return `
-      <div class="search-tooltip-card">
-        <div class="search-tooltip-title">序列点 · 属 ${escapeHtml(ownerLabel)}</div>
-        <div class="search-tooltip-row">
-          <span>所属搜索点</span>
-          <strong>${escapeHtml(ownerLabel)}</strong>
-        </div>
-        <div class="search-tooltip-row">
-          <span>Pano ID</span>
-          <strong>${escapeHtml(downloadPoint.pano_id || "—")}</strong>
-        </div>
-        <div class="search-tooltip-row">
-          <span>序列</span>
-          <strong>${escapeHtml(sequenceId)}</strong>
-        </div>
-        <div class="search-tooltip-row">
-          <span>日期</span>
-          <strong>${escapeHtml(date)}</strong>
-        </div>
-        <div class="search-tooltip-row">
-          <span>地点</span>
-          <strong>${escapeHtml(location)}</strong>
-        </div>
-      </div>
-    `;
-  }
-
   function tooltipText(params) {
-    const data = params.data || {};
-    // Sequence-point hits use their own template; they intentionally do NOT
-    // route through pointFromParams (which returns the owning search anchor
-    // for click-to-focus), because the tooltip wants the single pano's info.
-    if (data.kind === "sequence-point" && data.raw) {
-      return tooltipForSequencePoint(data.raw);
-    }
     const point = pointFromParams(params) || {};
+    const data = params.data || {};
     const value = Array.isArray(data.value) ? data.value : params.value || [];
     const lon = tooltipCoord(point, value, "lon", 0);
     const lat = tooltipCoord(point, value, "lat", 1);
     const count = Array.isArray(point.downloads) ? point.downloads.length : 0;
     const location = `${formatCoord(lat)}, ${formatCoord(lon)}`;
-    const indexLabel = Number.isInteger(point.displayIndex) ? `#${point.displayIndex}` : "—";
+    // search_point_id == anchor pano_id; 1-1 with this search point.
+    // Show it as the search point's identity in place of the old #N label.
+    const idLabel = point.search_point_id && point.search_point_id !== LEGACY_SEARCH_POINT_ID
+      ? point.search_point_id
+      : (Number.isInteger(point.displayIndex) ? `#${point.displayIndex}` : "—");
     return `
       <div class="search-tooltip-card">
-        <div class="search-tooltip-title">搜索点 ${escapeHtml(indexLabel)}</div>
+        <div class="search-tooltip-title">搜索点</div>
         <div class="search-tooltip-row">
-          <span>编号</span>
-          <strong>${escapeHtml(indexLabel)}</strong>
+          <span>ID</span>
+          <strong>${escapeHtml(idLabel)}</strong>
         </div>
         <div class="search-tooltip-row">
           <span>地点</span>
@@ -701,8 +527,10 @@
       elements.detailPanel.innerHTML = `<p class="detail-empty">点击地球上的搜索点查看对应下载点列表。</p>`;
       return;
     }
-    const indexLabel = Number.isInteger(target.displayIndex) ? `#${target.displayIndex}` : "";
-    const titleSuffix = indexLabel ? ` ${escapeHtml(indexLabel)}` : "";
+    const idLabel = (target.search_point_id && target.search_point_id !== LEGACY_SEARCH_POINT_ID)
+      ? target.search_point_id
+      : (Number.isInteger(target.displayIndex) ? `#${target.displayIndex}` : "");
+    const titleSuffix = idLabel ? ` ${escapeHtml(idLabel)}` : "";
     elements.detailPanel.innerHTML = `
       <div class="panel-title-row">
         <div>
@@ -729,9 +557,9 @@
   }
 
   function downloadCard(point, index) {
-    const sequenceDisplay = (!point.sequence_id || point.sequence_id === LEGACY_SEQUENCE_ID)
+    const idDisplay = (!point.search_point_id || point.search_point_id === LEGACY_SEARCH_POINT_ID)
       ? "—"
-      : point.sequence_id;
+      : point.search_point_id;
     const rows = [
       { label: "Pano ID", value: point.pano_id || "-" },
       { label: "地点", value: `${formatCoord(point.lat)}, ${formatCoord(point.lon)}` },
@@ -739,7 +567,7 @@
       { label: "Heading", value: point.heading || "-" },
       { label: "Pitch", value: point.pitch || "-" },
       { label: "Roll", value: point.roll || "-" },
-      { label: "Sequence", value: sequenceDisplay },
+      { label: "Search Point ID", value: idDisplay },
       { label: "Timestamp", value: point.timestamp || "-" }
     ];
     return `
@@ -785,7 +613,6 @@
     state.records = [];
     state.points = [];
     state.searchPoints = [];
-    state.sequences = [];
     state.config = null;
     state.selected = null;
     state.cameraTarget = null;
@@ -808,12 +635,6 @@
     elements.loadConfiguredData.addEventListener("click", loadConfiguredData);
     elements.clearData.addEventListener("click", clearData);
     elements.themeToggle.addEventListener("click", toggleTheme);
-    if (elements.toggleSequences) {
-      elements.toggleSequences.addEventListener("change", event => {
-        state.sequencesEnabled = Boolean(event.target.checked);
-        renderGlobe({ reset: true });
-      });
-    }
     chart.on("click", params => {
       const point = pointFromParams(params);
       if (!point) return;

@@ -43,8 +43,8 @@ GOOGLE_API_KEY=你的Google_API_Key
 
 ### CSV schema
 
-`info.csv` 字段：`pano_id, lat, lon, heading, pitch, roll, date, search_point, timestamp, sequence_id`。
-旧文件缺少 `timestamp` / `sequence_id` 时，加载会自动补 `""` / `"unknown"`，下次写入即升级到新 schema。Sequence 模式记录会写入真实 `timestamp`（= `date`）和共享的 `sequence_id`（anchor pano_id）。
+`info.csv` 字段：`pano_id, lat, lon, heading, pitch, roll, date, search_point, timestamp, search_point_id`。
+旧文件缺少 `timestamp` / `search_point_id` 时，加载会自动补 `""` / `"unknown"`，下次写入即升级到新 schema。Sequence 模式记录会写入真实 `timestamp`（= `date`）和共享的 `search_point_id`（anchor pano_id，与该搜索点一一对应）。
 
 ## 使用
 
@@ -57,7 +57,7 @@ python3 main.py
 
 ### Sequence 诊断 CLI
 
-`integration/sequence_audit.py` 按 `sequence_id` 离线核对 `info.csv`，输出每个序列的长度、平均步距、最大步距、断裂数（默认阈值 30 m）：
+`integration/sequence_audit.py` 按 `search_point_id` 离线核对 `info.csv`，输出每个序列的长度、平均步距、最大步距、断裂数（默认阈值 30 m）：
 
 ```bash
 python -m integration.sequence_audit                     # 默认读 config.metadata_path
@@ -78,7 +78,7 @@ python3 -m http.server 8765
 
 然后浏览器打开 `http://127.0.0.1:8765/Visualization/`。
 
-CSV 中带真实 `sequence_id` 的全景会按 sequence 自动着色并连线；旧的 `unknown` 记录仍按搜索点橙色显示。面板上的「按序列着色 + 连线」开关可临时关掉序列图层；勾选时，已被真实序列覆盖的橙色搜索点会自动淡化，避免与序列图层抢色。同一 `sequence_id` 在多次刷新间颜色保持一致。
+地球上只渲染搜索点。hover 时显示该搜索点的 `search_point_id`（即 anchor pano_id）作为 ID；CSV 中同一搜索点的所有下载点共享该 ID，点击后右侧面板列出完整下载点。
 
 ## 项目结构
 

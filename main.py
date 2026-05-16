@@ -56,7 +56,7 @@ SEQUENCE_STEP_METERS = float(_cfg.get("sequence_step_meters", 8.0))
 
 # Legacy / random_incremental rows lack a true sequence; persist a sentinel
 # so downstream consumers can distinguish them from real sequences.
-LEGACY_SEQUENCE_ID = "unknown"
+LEGACY_SEARCH_POINT_ID = "unknown"
 EARTH_RADIUS_METERS = 6_371_000.0
 
 logging.basicConfig(
@@ -131,8 +131,8 @@ def load_info_records() -> dict[str, dict]:
                 # backfill so downstream code never has to None-guard them.
                 if not row.get("timestamp"):
                     row["timestamp"] = ""
-                if not row.get("sequence_id"):
-                    row["sequence_id"] = LEGACY_SEQUENCE_ID
+                if not row.get("search_point_id"):
+                    row["search_point_id"] = LEGACY_SEARCH_POINT_ID
                 records[row["pano_id"]] = row
     return records
 
@@ -148,7 +148,7 @@ def build_info_row(
     pano,
     search_point: Tuple[float, float] | None = None,
     *,
-    sequence_id: str = LEGACY_SEQUENCE_ID,
+    search_point_id: str = LEGACY_SEARCH_POINT_ID,
     timestamp: str = "",
 ) -> dict:
     return {
@@ -161,7 +161,7 @@ def build_info_row(
         "date": pano.date,
         "search_point": format_search_point(search_point),
         "timestamp": timestamp,
-        "sequence_id": sequence_id,
+        "search_point_id": search_point_id,
     }
 
 
@@ -176,10 +176,10 @@ def download_missing_panorama(
     session,
     search_point: Tuple[float, float] | None = None,
     *,
-    sequence_id: str = LEGACY_SEQUENCE_ID,
+    search_point_id: str = LEGACY_SEARCH_POINT_ID,
     timestamp: str = "",
 ) -> bool:
-    row = build_info_row(pano, search_point, sequence_id=sequence_id, timestamp=timestamp)
+    row = build_info_row(pano, search_point, search_point_id=search_point_id, timestamp=timestamp)
     panoPath.mkdir(parents=True, exist_ok=True)
     img_path = panoPath / f"{pano.pano_id}.png"
     if img_path.exists():
@@ -445,7 +445,7 @@ def _walk_sequence(
     *,
     anchor: Panorama,
     initial_heading: float,
-    sequence_id: str,
+    search_point_id: str,
     records: dict[str, dict],
     session,
     seed_search_point: Tuple[float, float],
@@ -507,14 +507,14 @@ def _walk_sequence(
                 records,
                 session,
                 seed_search_point,
-                sequence_id=sequence_id,
+                search_point_id=search_point_id,
                 timestamp=candidate.date or "",
             ):
                 added_local += 1
                 write_info_records(records)
                 log.info(
-                    "Sequence walk +1 (%d total): pano_id=%s sequence_id=%s heading=%.1f",
-                    current_added + added_local, candidate.pano_id, sequence_id, heading,
+                    "Sequence walk +1 (%d total): pano_id=%s search_point_id=%s heading=%.1f",
+                    current_added + added_local, candidate.pano_id, search_point_id, heading,
                 )
                 if current_added + added_local >= target_new:
                     return added_local
@@ -547,7 +547,7 @@ def fetch_random_sequence_panoramas(
     Differences vs. ``fetch_random_incremental_panoramas``:
         * Cross-year duplicates at the same lat/lon are skipped — only the
           largest same-date group at each search point is downloaded.
-        * Every record in a session shares one ``sequence_id`` (the anchor
+        * Every record in a session shares one ``search_point_id`` (the anchor
           pano_id) and a ``timestamp`` (= its ``date`` field).
         * When ``walk_enabled`` is true the sequence is extended by stepping
           along the road. Each step adapts to the candidate pano's own heading
@@ -589,7 +589,7 @@ def fetch_random_sequence_panoramas(
             continue
 
         anchor = cluster[0]
-        sequence_id = anchor.pano_id
+        search_point_id = anchor.pano_id
         log.info(
             "Sequence anchor pano_id=%s date=%s cluster_size=%d (skipped %d cross-date pano(s))",
             anchor.pano_id, anchor.date or "current", len(cluster), len(panos) - len(cluster),
@@ -607,14 +607,14 @@ def fetch_random_sequence_panoramas(
                         records,
                         session,
                         (lat, lon),
-                        sequence_id=sequence_id,
+                        search_point_id=search_point_id,
                         timestamp=pano.date or "",
                     ):
                         added += 1
                         write_info_records(records)
                         log.info(
-                            "Sequence crawl +1 (%d/%d): pano_id=%s sequence_id=%s",
-                            added, target_new, pano.pano_id, sequence_id,
+                            "Sequence crawl +1 (%d/%d): pano_id=%s search_point_id=%s",
+                            added, target_new, pano.pano_id, search_point_id,
                         )
                 except Exception as e:
                     if is_quota_error(e):
@@ -641,7 +641,7 @@ def fetch_random_sequence_panoramas(
                     walked = _walk_sequence(
                         anchor=anchor,
                         initial_heading=direction,
-                        sequence_id=sequence_id,
+                        search_point_id=search_point_id,
                         records=records,
                         session=session,
                         seed_search_point=(lat, lon),
