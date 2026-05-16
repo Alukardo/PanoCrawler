@@ -8,7 +8,7 @@ from typing import Any, Callable
 from .config import cfg as _cfg, resolve_project_path
 
 
-COUNTED_REQUEST_KEYS = {"search_requests", "session_requests", "tile_requests"}
+COUNTED_REQUEST_KEYS = {"search_requests", "session_requests", "tile_requests", "metadata_requests"}
 USAGE_PATH = resolve_project_path(_cfg.get("google_api_usage_path", "runtime/google_api_usage.json"))
 DAILY_QUOTA = int(_cfg.get("google_api_daily_quota", 15000))
 DAILY_SOFT_LIMIT = int(_cfg.get("google_api_daily_soft_limit", min(DAILY_QUOTA, 13500)))

@@ -32,6 +32,9 @@ LABEL_DIR = OUT_DIR / "train_cond"
 DISTANCE_THRESHOLD = _cfg["distance_threshold"]  # default 1e-8 ≈ 11m at equator
 
 
+LEGACY_SEQUENCE_ID = "unknown"
+
+
 @dataclass(frozen=True)
 class PanoramaRecord:
     pano_id: str
@@ -41,12 +44,15 @@ class PanoramaRecord:
     pitch: float | None = None
     roll: float | None = None
     date: str | None = None
+    sequence_id: str = LEGACY_SEQUENCE_ID
+    timestamp: str | None = None
 
     @classmethod
     def from_row(cls, row: dict[str, str | None]) -> "PanoramaRecord":
         pano_id = (row["pano_id"] or "").strip()
         if not pano_id:
             raise ValueError("missing pano_id")
+        sequence_id = (row.get("sequence_id") or LEGACY_SEQUENCE_ID).strip() or LEGACY_SEQUENCE_ID
         return cls(
             pano_id=pano_id,
             lat=float((row["lat"] or "").strip()),
@@ -55,6 +61,8 @@ class PanoramaRecord:
             pitch=parse_optional_float(row.get("pitch")),
             roll=parse_optional_float(row.get("roll")),
             date=(row.get("date") or "").strip() or None,
+            sequence_id=sequence_id,
+            timestamp=(row.get("timestamp") or "").strip() or None,
         )
 
 
@@ -95,6 +103,65 @@ class AllPairsWithinDistance:
         for a, b in itertools.combinations(records, 2):
             if self.distance_metric.is_close(a, b):
                 yield a, b
+
+
+class SameSequencePairSelector:
+    """Yield all pairs that share a real ``sequence_id``.
+
+    Sequence-aware crawl groups panoramas captured in the same session under a
+    shared ``sequence_id``. Pairs drawn from the same group have:
+
+    * identical lighting / weather (same drive),
+    * identical camera rig (same calibration),
+    * known temporal ordering,
+
+    which makes them ideal positive samples for view-synthesis or NeRF-style
+    training. Legacy rows (``sequence_id == "unknown"``) are excluded since
+    we cannot guarantee same-session capture.
+
+    An optional ``distance_metric`` can further filter to nearby pairs only;
+    leave it ``None`` to keep every same-sequence pair.
+    """
+
+    def __init__(self, distance_metric: DistanceMetric | None = None):
+        self.distance_metric = distance_metric
+
+    def select(self, records: Sequence[PanoramaRecord]) -> Iterable[tuple[PanoramaRecord, PanoramaRecord]]:
+        groups: dict[str, list[PanoramaRecord]] = {}
+        for record in records:
+            sid = record.sequence_id or LEGACY_SEQUENCE_ID
+            if sid == LEGACY_SEQUENCE_ID:
+                continue
+            groups.setdefault(sid, []).append(record)
+
+        for members in groups.values():
+            if len(members) < 2:
+                continue
+            for a, b in itertools.combinations(members, 2):
+                if self.distance_metric is not None and not self.distance_metric.is_close(a, b):
+                    continue
+                yield a, b
+
+
+def make_pair_selector(
+    mode: str,
+    distance_metric: DistanceMetric,
+) -> PairSelector:
+    """Translate a ``pair_selector_mode`` config string into a concrete selector.
+
+    Modes:
+        * ``"all_within_distance"`` — original behaviour (default).
+        * ``"same_sequence"``       — only same-session pairs, no distance filter.
+        * ``"same_sequence_and_distance"`` — same-session pairs that also pass
+          the distance check.
+    """
+    if mode == "all_within_distance":
+        return AllPairsWithinDistance(distance_metric)
+    if mode == "same_sequence":
+        return SameSequencePairSelector(distance_metric=None)
+    if mode == "same_sequence_and_distance":
+        return SameSequencePairSelector(distance_metric=distance_metric)
+    raise ValueError(f"Unknown pair_selector_mode: {mode!r}")
 
 
 class SampleWriter(Protocol):
@@ -207,7 +274,9 @@ def build_training_pairs(
         Number of training pairs generated.
     """
     records = load_records(filename)
-    pair_selector = pair_selector or AllPairsWithinDistance(SquaredDegreeDistance(DISTANCE_THRESHOLD))
+    if pair_selector is None:
+        mode = str(_cfg.get("pair_selector_mode", "all_within_distance"))
+        pair_selector = make_pair_selector(mode, SquaredDegreeDistance(DISTANCE_THRESHOLD))
     sample_writer = sample_writer or CopyBidirectionalSampleWriter(
         source_dir=SOURCE_DIR,
         input_dir=INPUT_DIR,

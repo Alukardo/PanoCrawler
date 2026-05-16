@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from PIL import Image
 sys.path.insert(0, str(Path(__file__).parent.parent))
 import integration.build_quality_dataset as quality_dataset
+import integration.sequence_audit as sequence_audit
 import main
 import build_training_pairs as training_pairs_module
 import panorama.config as config_module
@@ -668,6 +669,8 @@ class TestFetchPanoramas:
                 "roll": "2.0",
                 "date": "2022-05",
                 "search_point": "[25.000000, 121.500000]",
+                "timestamp": "",
+                "sequence_id": main.LEGACY_SEQUENCE_ID,
             },
             {
                 "pano_id": "new",
@@ -678,6 +681,8 @@ class TestFetchPanoramas:
                 "roll": "0.2",
                 "date": "2023-07",
                 "search_point": "[25.000000, 121.500000]",
+                "timestamp": "",
+                "sequence_id": main.LEGACY_SEQUENCE_ID,
             },
         ]
         assert len(downloaded) == 1
@@ -754,6 +759,7 @@ class TestFetchPanoramas:
         assert rows[0]["search_point"] == "[25.000000, 121.500000]"
 
     def test_removes_stale_record_when_missing_image_download_fails(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(main, "SKIP_LOW_PANO_SEARCH", False)
         pano_dir = tmp_path / "images" / "pano"
         pano_dir.mkdir(parents=True)
         info_file = pano_dir / "info.csv"
@@ -786,7 +792,8 @@ class TestFetchPanoramas:
         rows = list(main.csv.DictReader(info_file.open(encoding="utf-8")))
         assert rows == []
 
-    def test_process_on_download_does_not_run_second_black_edge_processing(self, tmp_path, monkeypatch):
+    def test_fetch_panoramas_persists_image_and_cleans_tmp(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(main, "SKIP_LOW_PANO_SEARCH", False)
         pano_dir = tmp_path / "images" / "pano"
         pano_dir.mkdir(parents=True)
         info_file = pano_dir / "info.csv"
@@ -797,24 +804,24 @@ class TestFetchPanoramas:
         monkeypatch.setattr(main, "get_session", lambda: object())
         monkeypatch.setattr(main.random, "uniform", lambda _a, _b: 0.0)
         monkeypatch.setattr(main.time, "sleep", lambda _delay: None)
-        monkeypatch.setitem(main._cfg, "process_on_download", True)
         monkeypatch.setattr(
             main,
             "search_panoramas",
             lambda lat, lon: [
-                Panorama(pano_id="postprocess_fail", lat=1.0, lon=2.0, heading=90.0, date="2020-01"),
+                Panorama(pano_id="pano_a", lat=1.0, lon=2.0, heading=90.0, date="2020-01"),
             ],
         )
         monkeypatch.setattr(main, "get_panorama", lambda **_kwargs: DummyImage())
 
         main.fetch_panoramas((25.0, 121.5), isCurrent=False)
 
-        assert (pano_dir / "postprocess_fail.png").exists()
+        assert (pano_dir / "pano_a.png").exists()
         assert not any(pano_dir.glob("*.tmp.png"))
         rows = list(main.csv.DictReader(info_file.open(encoding="utf-8")))
-        assert [row["pano_id"] for row in rows] == ["postprocess_fail"]
+        assert [row["pano_id"] for row in rows] == ["pano_a"]
 
     def test_random_incremental_crawl_adds_target_new_panoramas(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(main, "SKIP_LOW_PANO_SEARCH", False)
         pano_dir = tmp_path / "images" / "pano"
         metadata_dir = tmp_path / "images"
         pano_dir.mkdir(parents=True)
@@ -869,6 +876,901 @@ class TestFetchPanoramas:
         assert [item[0] for item in downloaded] == ["new_current", "new_history"]
         assert (pano_dir / "new_current.png").exists()
         assert (pano_dir / "new_history.png").exists()
+
+    def test_fetch_panoramas_skips_search_point_with_too_few_results(self, tmp_path, monkeypatch):
+        pano_dir = tmp_path / "images" / "pano"
+        pano_dir.mkdir(parents=True)
+        info_file = pano_dir / "info.csv"
+        info_file.write_text("pano_id,lat,lon,heading,pitch,roll,date\n", encoding="utf-8")
+
+        monkeypatch.setattr(main, "panoPath", pano_dir)
+        monkeypatch.setattr(main, "infoPath", info_file)
+        monkeypatch.setattr(main, "SKIP_LOW_PANO_SEARCH", True)
+        monkeypatch.setattr(main, "MIN_PANOS_PER_SEARCH", 2)
+        monkeypatch.setattr(main, "get_session", lambda: object())
+
+        def fail_download(*_args, **_kwargs):
+            raise AssertionError("download must not run when search is skipped")
+
+        monkeypatch.setattr(
+            main,
+            "search_panoramas",
+            lambda lat, lon: [Panorama(pano_id="only", lat=1.0, lon=2.0, heading=0.0, date="2020-01")],
+        )
+        monkeypatch.setattr(main, "get_panorama", fail_download)
+
+        assert main.fetch_panoramas((25.0, 121.5), isCurrent=False) == 0
+        rows = list(main.csv.DictReader(info_file.open(encoding="utf-8")))
+        assert rows == []
+
+    def test_fetch_panoramas_honors_disabled_skip_low_pano_search(self, tmp_path, monkeypatch):
+        pano_dir = tmp_path / "images" / "pano"
+        pano_dir.mkdir(parents=True)
+        info_file = pano_dir / "info.csv"
+        info_file.write_text("pano_id,lat,lon,heading,pitch,roll,date\n", encoding="utf-8")
+
+        monkeypatch.setattr(main, "panoPath", pano_dir)
+        monkeypatch.setattr(main, "infoPath", info_file)
+        monkeypatch.setattr(main, "SKIP_LOW_PANO_SEARCH", False)
+        monkeypatch.setattr(main, "MIN_PANOS_PER_SEARCH", 5)
+        monkeypatch.setattr(main, "get_session", lambda: object())
+        monkeypatch.setattr(main.random, "uniform", lambda _a, _b: 0.0)
+        monkeypatch.setattr(main.time, "sleep", lambda _delay: None)
+        monkeypatch.setattr(
+            main,
+            "search_panoramas",
+            lambda lat, lon: [Panorama(pano_id="solo", lat=1.0, lon=2.0, heading=0.0, date="2020-01")],
+        )
+        monkeypatch.setattr(main, "get_panorama", lambda **_kwargs: DummyImage())
+
+        main.fetch_panoramas((25.0, 121.5), isCurrent=False)
+        rows = list(main.csv.DictReader(info_file.open(encoding="utf-8")))
+        assert [row["pano_id"] for row in rows] == ["solo"]
+
+    def test_fetch_panoramas_raises_quota_when_search_hits_soft_limit(self, tmp_path, monkeypatch):
+        pano_dir = tmp_path / "images" / "pano"
+        pano_dir.mkdir(parents=True)
+        info_file = pano_dir / "info.csv"
+        info_file.write_text("pano_id,lat,lon,heading,pitch,roll,date\n", encoding="utf-8")
+
+        monkeypatch.setattr(main, "panoPath", pano_dir)
+        monkeypatch.setattr(main, "infoPath", info_file)
+        monkeypatch.setattr(main, "get_session", lambda: object())
+
+        def quota_search(lat, lon):
+            raise PanoramaSearchError("daily soft limit reached") from GoogleAPIQuotaExceededError("limit reached")
+
+        monkeypatch.setattr(main, "search_panoramas", quota_search)
+        monkeypatch.setattr(main, "get_panorama", lambda **_kwargs: pytest.fail("download must not run"))
+
+        with pytest.raises(GoogleAPIQuotaExceededError):
+            main.fetch_panoramas((25.0, 121.5), isCurrent=False)
+
+    def test_fetch_panoramas_raises_quota_and_persists_records_when_download_hits_soft_limit(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(main, "SKIP_LOW_PANO_SEARCH", False)
+        pano_dir = tmp_path / "images" / "pano"
+        pano_dir.mkdir(parents=True)
+        info_file = pano_dir / "info.csv"
+        info_file.write_text("pano_id,lat,lon,heading,pitch,roll,date,search_point\n", encoding="utf-8")
+
+        monkeypatch.setattr(main, "panoPath", pano_dir)
+        monkeypatch.setattr(main, "infoPath", info_file)
+        monkeypatch.setattr(main, "get_session", lambda: object())
+        monkeypatch.setattr(main.random, "uniform", lambda _a, _b: 0.0)
+        monkeypatch.setattr(main.time, "sleep", lambda _delay: None)
+        monkeypatch.setattr(
+            main,
+            "search_panoramas",
+            lambda lat, lon: [
+                Panorama(pano_id="quota_only", lat=1.0, lon=2.0, heading=90.0, date="2020-01"),
+            ],
+        )
+
+        def quota_download(*_args, **_kwargs):
+            raise PanoDownloadError("daily soft limit") from GoogleAPIQuotaExceededError("limit reached")
+
+        monkeypatch.setattr(main, "get_panorama", quota_download)
+
+        with pytest.raises(GoogleAPIQuotaExceededError):
+            main.fetch_panoramas((25.0, 121.5), isCurrent=False)
+
+        rows = list(main.csv.DictReader(info_file.open(encoding="utf-8")))
+        assert rows == []
+        assert not any(pano_dir.glob("*.tmp.png"))
+
+    def test_main_breaks_fixed_loop_on_quota(self, monkeypatch):
+        calls: list[Tuple[float, float]] = []
+
+        def fake_fetch(loc, isCurrent):
+            calls.append(loc)
+            if len(calls) == 1:
+                raise GoogleAPIQuotaExceededError("limit reached")
+            return 0
+
+        monkeypatch.setattr(main, "CRAWL_MODE", "fixed")
+        monkeypatch.setattr(main, "locList", [(1.0, 2.0), (3.0, 4.0)])
+        monkeypatch.setattr(main, "init_info", lambda: None)
+        monkeypatch.setattr(main, "fetch_panoramas", fake_fetch)
+
+        assert main.main() == 0
+        assert calls == [(1.0, 2.0)]
+
+
+class TestSchemaMigration:
+    """Legacy ``info.csv`` rows (pre-sequence schema) must keep working."""
+
+    def test_load_info_records_backfills_legacy_fields(self, tmp_path, monkeypatch):
+        info_file = tmp_path / "info.csv"
+        info_file.write_text(
+            "pano_id,lat,lon,heading,pitch,roll,date,search_point\n"
+            "old,1.0,2.0,90.0,0.0,0.0,2020-01,\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(main, "infoPath", info_file)
+
+        records = main.load_info_records()
+
+        assert "old" in records
+        assert records["old"]["timestamp"] == ""
+        assert records["old"]["sequence_id"] == main.LEGACY_SEQUENCE_ID
+
+    def test_load_info_records_preserves_existing_sequence_fields(self, tmp_path, monkeypatch):
+        info_file = tmp_path / "info.csv"
+        info_file.write_text(
+            "pano_id,lat,lon,heading,pitch,roll,date,search_point,timestamp,sequence_id\n"
+            "seq,1.0,2.0,90.0,0.0,0.0,2023-04,,2023-04,anchor_pano\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(main, "infoPath", info_file)
+
+        records = main.load_info_records()
+
+        assert records["seq"]["timestamp"] == "2023-04"
+        assert records["seq"]["sequence_id"] == "anchor_pano"
+
+    def test_legacy_csv_round_trip_persists_backfilled_fields(self, tmp_path, monkeypatch):
+        info_file = tmp_path / "info.csv"
+        info_file.write_text(
+            "pano_id,lat,lon,heading,pitch,roll,date,search_point\n"
+            "old,1.0,2.0,90.0,0.0,0.0,2020-01,\n",
+            encoding="utf-8",
+        )
+        pano_dir = tmp_path / "pano"
+        pano_dir.mkdir()
+        monkeypatch.setattr(main, "infoPath", info_file)
+        monkeypatch.setattr(main, "panoPath", pano_dir)
+
+        records = main.load_info_records()
+        main.write_info_records(records)
+
+        rewritten = list(main.csv.DictReader(info_file.open(encoding="utf-8")))
+        assert rewritten[0]["timestamp"] == ""
+        assert rewritten[0]["sequence_id"] == main.LEGACY_SEQUENCE_ID
+        assert rewritten[0]["date"] == "2020-01"
+
+
+class TestSequenceCrawl:
+    """Sequence-aware crawl groups by date and walks along heading."""
+
+    def test_pick_sequence_cluster_picks_largest_group(self):
+        panos = [
+            Panorama(pano_id="a1", lat=1.0, lon=2.0, heading=0.0, date="2010-01"),
+            Panorama(pano_id="b1", lat=1.0, lon=2.0, heading=10.0, date="2023-04"),
+            Panorama(pano_id="b2", lat=1.0, lon=2.0001, heading=12.0, date="2023-04"),
+            Panorama(pano_id="b3", lat=1.0, lon=2.0002, heading=13.0, date="2023-04"),
+            Panorama(pano_id="c1", lat=1.0, lon=2.0, heading=20.0, date="2019-08"),
+        ]
+        cluster = main.pick_sequence_cluster(panos)
+        assert [p.pano_id for p in cluster] == ["b1", "b2", "b3"]
+
+    def test_pick_sequence_cluster_breaks_ties_by_most_recent_date(self):
+        panos = [
+            Panorama(pano_id="x", lat=1.0, lon=2.0, heading=0.0, date="2010-01"),
+            Panorama(pano_id="y", lat=1.0, lon=2.0, heading=0.0, date="2023-04"),
+        ]
+        cluster = main.pick_sequence_cluster(panos)
+        assert [p.pano_id for p in cluster] == ["y"]
+
+    def test_pick_sequence_cluster_falls_back_to_anchor_when_all_dates_missing(self, caplog):
+        """全 None 是 best_key='' 且 size>1 的特例。"""
+        panos = [
+            Panorama(pano_id="a", lat=1.0, lon=2.0, heading=0.0, date=None),
+            Panorama(pano_id="b", lat=1.0, lon=2.0001, heading=10.0, date=None),
+            Panorama(pano_id="c", lat=1.0, lon=2.0002, heading=20.0, date=None),
+        ]
+        caplog.set_level("WARNING", logger=main.__name__)
+        cluster = main.pick_sequence_cluster(panos)
+        assert [p.pano_id for p in cluster] == ["a"]
+        assert any("undated" in rec.message for rec in caplog.records)
+
+    def test_pick_sequence_cluster_falls_back_when_undated_group_is_largest(self, caplog):
+        """Regression: GSV 有时只标极少数 pano 的 date,其余全 current(None)。
+        旧逻辑会选 None 组(最大)作 cluster,把多条街道的 current 错聚成一个 sequence。
+        """
+        panos = [
+            Panorama(pano_id="historic", lat=1.0, lon=2.0, heading=0.0, date="2020-01"),
+            Panorama(pano_id="curr1", lat=1.0001, lon=2.0, heading=0.0, date=None),
+            Panorama(pano_id="curr2", lat=1.0002, lon=2.0, heading=0.0, date=None),
+            Panorama(pano_id="curr3", lat=1.0003, lon=2.0, heading=0.0, date=None),
+            Panorama(pano_id="curr4", lat=1.0004, lon=2.0, heading=0.0, date=None),
+        ]
+        caplog.set_level("WARNING", logger=main.__name__)
+        cluster = main.pick_sequence_cluster(panos)
+        assert [p.pano_id for p in cluster] == ["curr1"], (
+            "None group(4 个)是最大组但不能聚合,降级为 anchor-only"
+        )
+        assert any("undated" in rec.message for rec in caplog.records)
+
+    def test_pick_sequence_cluster_keeps_single_undated(self):
+        """单个 None pano 是正常 current capture,不退化。"""
+        panos = [
+            Panorama(pano_id="curr", lat=1.0, lon=2.0, heading=0.0, date=None),
+        ]
+        cluster = main.pick_sequence_cluster(panos)
+        assert [p.pano_id for p in cluster] == ["curr"]
+
+    def test_pick_sequence_cluster_prefers_largest_dated_group(self):
+        """有具体 date 的 group 大于 None group 时,正常选历史 group。"""
+        panos = [
+            Panorama(pano_id="curr", lat=1.0, lon=2.0, heading=0.0, date=None),
+            Panorama(pano_id="h1", lat=1.0, lon=2.0, heading=0.0, date="2020-01"),
+            Panorama(pano_id="h2", lat=1.0001, lon=2.0, heading=0.0, date="2020-01"),
+            Panorama(pano_id="h3", lat=1.0002, lon=2.0, heading=0.0, date="2020-01"),
+        ]
+        cluster = main.pick_sequence_cluster(panos)
+        assert [p.pano_id for p in cluster] == ["h1", "h2", "h3"]
+
+    def test_pick_sequence_cluster_empty_input_returns_empty(self):
+        assert main.pick_sequence_cluster([]) == []
+
+    def test_select_sequence_neighbor_matches_when_dates_present(self):
+        neighbors = [
+            Panorama(pano_id="other", lat=1.0, lon=2.0, heading=0.0, date="2020-01"),
+            Panorama(pano_id="match", lat=1.0, lon=2.0, heading=0.0, date="2023-04"),
+        ]
+        result = main._select_sequence_neighbor(
+            neighbors, anchor_date="2023-04", seen_ids=set()
+        )
+        assert result is not None and result.pano_id == "match"
+
+    def test_select_sequence_neighbor_matches_current_session(self):
+        """``None`` date 在 Street View 响应里代表 current/latest sweep,不是缺失。
+        anchor 与 neighbor 都没 date 表示沿街连续 current capture,合法 same-session。"""
+        neighbors = [
+            Panorama(pano_id="historic", lat=1.0, lon=2.0, heading=0.0, date="2020-01"),
+            Panorama(pano_id="current", lat=1.0, lon=2.0, heading=0.0, date=None),
+        ]
+        result = main._select_sequence_neighbor(
+            neighbors, anchor_date="", seen_ids=set()
+        )
+        assert result is not None and result.pano_id == "current", (
+            "anchor 与 neighbor 都是 current(date=None)时应当匹配,"
+            "这是合法的 current-session 沿街 walk"
+        )
+
+    def test_select_sequence_neighbor_current_does_not_match_historic(self):
+        """current anchor(date=None)不应吃掉历史 neighbor(具体 YYYY-MM)。"""
+        neighbors = [
+            Panorama(pano_id="historic", lat=1.0, lon=2.0, heading=0.0, date="2020-01"),
+        ]
+        result = main._select_sequence_neighbor(
+            neighbors, anchor_date="", seen_ids=set()
+        )
+        assert result is None
+
+    def test_walk_sequence_works_on_current_anchor(self, monkeypatch):
+        """current-session walk:anchor.date=None + neighbor.date=None 应该正常 walk。"""
+        downloaded: list[str] = []
+        # 用 nonlocal 计数器生成唯一 pano_id,避免相邻 8m 步进的浮点坐标格式化
+        # 后撞 id 被 seen_ids 跳过。
+        step_index = {"n": 0}
+
+        def fake_search(lat, lon):
+            step_index["n"] += 1
+            return [Panorama(
+                pano_id=f"current_step_{step_index['n']}",
+                lat=lat, lon=lon, heading=0.0, date=None,
+            )]
+
+        def fake_download(pano, records, session, search_point, **kwargs):
+            downloaded.append(pano.pano_id)
+            return True
+
+        monkeypatch.setattr(main, "search_panoramas", fake_search)
+        monkeypatch.setattr(main, "download_missing_panorama", fake_download)
+        monkeypatch.setattr(main.time, "sleep", lambda _s: None)
+
+        anchor = Panorama(pano_id="anchor", lat=0.0, lon=0.0, heading=0.0, date=None)
+        added = main._walk_sequence(
+            anchor=anchor,
+            initial_heading=0.0,
+            sequence_id="anchor",
+            records={},
+            session=None,
+            seed_search_point=(0.0, 0.0),
+            max_extra=3,
+            step_meters=8.0,
+            target_new=10,
+            current_added=0,
+            seen_ids={"anchor"},
+        )
+        assert added == 3, (
+            "current anchor 沿街走应该能吸收同样 current 的 neighbors;"
+            "之前过度防御错误地禁掉了这条合法路径"
+        )
+        assert downloaded == ["current_step_1", "current_step_2", "current_step_3"]
+
+    def test_step_lat_lon_moves_north_and_east(self):
+        # 8 m due north → only latitude changes.
+        new_lat, new_lon = main.step_lat_lon(0.0, 0.0, heading_deg=0.0, distance_m=8.0)
+        assert new_lat > 0.0
+        assert abs(new_lon) < 1e-9
+        # 8 m due east at the equator → only longitude changes (within float noise).
+        new_lat_e, new_lon_e = main.step_lat_lon(0.0, 0.0, heading_deg=90.0, distance_m=8.0)
+        assert new_lon_e > 0.0
+        assert abs(new_lat_e) < 1e-9
+
+    def test_fetch_random_sequence_groups_by_date_and_skips_cross_year(self, tmp_path, monkeypatch):
+        pano_dir = tmp_path / "images" / "pano"
+        pano_dir.mkdir(parents=True)
+        info_file = pano_dir / "info.csv"
+        info_file.write_text(
+            ",".join(main.FIELDNAMES) + "\n",
+            encoding="utf-8",
+        )
+
+        monkeypatch.setattr(main, "panoPath", pano_dir)
+        monkeypatch.setattr(main, "infoPath", info_file)
+        monkeypatch.setattr(main, "get_session", lambda: object())
+        monkeypatch.setattr(main.time, "sleep", lambda _delay: None)
+        monkeypatch.setattr(main.random, "uniform", lambda _a, _b: 0.0)
+        monkeypatch.setattr(main, "random_location", lambda: (10.0, 20.0))
+        monkeypatch.setattr(main, "SKIP_LOW_PANO_SEARCH", False)
+
+        panos = [
+            Panorama(pano_id="hist_2010", lat=1.0, lon=2.0, heading=0.0, date="2010-01"),
+            Panorama(pano_id="anchor", lat=1.0, lon=2.0, heading=10.0, date="2023-04"),
+            Panorama(pano_id="follower", lat=1.0, lon=2.0001, heading=12.0, date="2023-04"),
+            Panorama(pano_id="hist_2019", lat=1.0, lon=2.0, heading=20.0, date="2019-08"),
+        ]
+        monkeypatch.setattr(main, "search_panoramas", lambda lat, lon: panos)
+
+        downloaded: list[str] = []
+
+        def fake_get_panorama(*, pano, zoom=None, session):
+            downloaded.append(pano.pano_id)
+            return DummyImage()
+
+        monkeypatch.setattr(main, "get_panorama", fake_get_panorama)
+
+        added = main.fetch_random_sequence_panoramas(
+            target_new=2, max_searches=1, walk_enabled=False,
+        )
+
+        assert added == 2
+        # Cross-year duplicates must be excluded.
+        assert downloaded == ["anchor", "follower"]
+        rows = list(main.csv.DictReader(info_file.open(encoding="utf-8")))
+        assert [row["pano_id"] for row in rows] == ["anchor", "follower"]
+        assert all(row["sequence_id"] == "anchor" for row in rows)
+        assert all(row["timestamp"] == "2023-04" for row in rows)
+
+    def test_fetch_random_sequence_walks_along_heading_when_enabled(self, tmp_path, monkeypatch):
+        pano_dir = tmp_path / "images" / "pano"
+        pano_dir.mkdir(parents=True)
+        info_file = pano_dir / "info.csv"
+        info_file.write_text(
+            ",".join(main.FIELDNAMES) + "\n",
+            encoding="utf-8",
+        )
+
+        monkeypatch.setattr(main, "panoPath", pano_dir)
+        monkeypatch.setattr(main, "infoPath", info_file)
+        monkeypatch.setattr(main, "get_session", lambda: object())
+        monkeypatch.setattr(main.time, "sleep", lambda _delay: None)
+        monkeypatch.setattr(main.random, "uniform", lambda _a, _b: 0.0)
+        monkeypatch.setattr(main, "random_location", lambda: (0.0, 0.0))
+        monkeypatch.setattr(main, "SKIP_LOW_PANO_SEARCH", False)
+
+        seed = [
+            Panorama(pano_id="anchor", lat=0.0, lon=0.0, heading=0.0, date="2023-04"),
+        ]
+        # Two more same-date panos discovered via heading walk; third step yields
+        # only a cross-date duplicate so the walk stops.
+        walks = [
+            [Panorama(pano_id="walk1", lat=0.0001, lon=0.0, heading=0.0, date="2023-04")],
+            [Panorama(pano_id="walk2", lat=0.0002, lon=0.0, heading=0.0, date="2023-04")],
+            [Panorama(pano_id="stale", lat=0.0003, lon=0.0, heading=0.0, date="2010-01")],
+        ]
+        search_calls: list[Tuple[float, float]] = []
+
+        def fake_search(lat, lon):
+            search_calls.append((lat, lon))
+            if len(search_calls) == 1:
+                return seed
+            return walks[len(search_calls) - 2]
+
+        monkeypatch.setattr(main, "search_panoramas", fake_search)
+        monkeypatch.setattr(main, "get_panorama", lambda **_kwargs: DummyImage())
+
+        added = main.fetch_random_sequence_panoramas(
+            target_new=10,
+            max_searches=1,
+            walk_enabled=True,
+            walk_bidirectional=False,
+            max_sequence_length=12,
+            step_meters=8.0,
+        )
+
+        assert added == 3
+        # 1 seed search + 3 walk searches (last hits cross-date and stops).
+        assert len(search_calls) == 4
+        rows = list(main.csv.DictReader(info_file.open(encoding="utf-8")))
+        assert [row["pano_id"] for row in rows] == ["anchor", "walk1", "walk2"]
+        assert {row["sequence_id"] for row in rows} == {"anchor"}
+
+    def test_fetch_random_sequence_walk_follows_candidate_heading_on_curves(self, tmp_path, monkeypatch):
+        """Each step must use the candidate's own heading, not the anchor's."""
+        pano_dir = tmp_path / "images" / "pano"
+        pano_dir.mkdir(parents=True)
+        info_file = pano_dir / "info.csv"
+        info_file.write_text(",".join(main.FIELDNAMES) + "\n", encoding="utf-8")
+
+        monkeypatch.setattr(main, "panoPath", pano_dir)
+        monkeypatch.setattr(main, "infoPath", info_file)
+        monkeypatch.setattr(main, "get_session", lambda: object())
+        monkeypatch.setattr(main.time, "sleep", lambda _delay: None)
+        monkeypatch.setattr(main.random, "uniform", lambda _a, _b: 0.0)
+        monkeypatch.setattr(main, "random_location", lambda: (0.0, 0.0))
+        monkeypatch.setattr(main, "SKIP_LOW_PANO_SEARCH", False)
+
+        # Anchor points north (heading=0). The first candidate points EAST
+        # (heading=90), so the second walk step must search east of candidate,
+        # not further north along the anchor's heading.
+        seed = [Panorama(pano_id="anchor", lat=0.0, lon=0.0, heading=0.0, date="2023-04")]
+        walk1 = [Panorama(pano_id="walk1", lat=0.001, lon=0.0, heading=90.0, date="2023-04")]
+        walk2 = [Panorama(pano_id="walk2", lat=0.001, lon=0.001, heading=90.0, date="2023-04")]
+
+        search_calls: list[Tuple[float, float]] = []
+        responses = [seed, walk1, walk2]
+
+        def fake_search(lat, lon):
+            search_calls.append((lat, lon))
+            if len(search_calls) <= len(responses):
+                return responses[len(search_calls) - 1]
+            return []  # Walk terminates naturally.
+
+        monkeypatch.setattr(main, "search_panoramas", fake_search)
+        monkeypatch.setattr(main, "get_panorama", lambda **_kwargs: DummyImage())
+
+        added = main.fetch_random_sequence_panoramas(
+            target_new=10,
+            max_searches=1,
+            walk_enabled=True,
+            walk_bidirectional=False,
+            max_sequence_length=12,
+            step_meters=8.0,
+        )
+
+        assert added == 3
+        # Walk #1 was issued strictly north of anchor (lat>0, lon=0). Walk #2,
+        # taken from walk1 along its east heading, must have moved east.
+        (_seed_lat, _seed_lon) = search_calls[0]
+        walk1_search_lat, walk1_search_lon = search_calls[1]
+        walk2_search_lat, walk2_search_lon = search_calls[2]
+        assert walk1_search_lat > 0 and abs(walk1_search_lon) < 1e-9, search_calls
+        assert walk2_search_lon > walk1_search_lon, search_calls
+
+    def test_fetch_random_sequence_walks_bidirectionally(self, tmp_path, monkeypatch):
+        """Forward + backward walks share seen_ids and extend in both directions."""
+        pano_dir = tmp_path / "images" / "pano"
+        pano_dir.mkdir(parents=True)
+        info_file = pano_dir / "info.csv"
+        info_file.write_text(",".join(main.FIELDNAMES) + "\n", encoding="utf-8")
+
+        monkeypatch.setattr(main, "panoPath", pano_dir)
+        monkeypatch.setattr(main, "infoPath", info_file)
+        monkeypatch.setattr(main, "get_session", lambda: object())
+        monkeypatch.setattr(main.time, "sleep", lambda _delay: None)
+        monkeypatch.setattr(main.random, "uniform", lambda _a, _b: 0.0)
+        monkeypatch.setattr(main, "random_location", lambda: (0.0, 0.0))
+        monkeypatch.setattr(main, "SKIP_LOW_PANO_SEARCH", False)
+
+        seed = [Panorama(pano_id="anchor", lat=0.0, lon=0.0, heading=0.0, date="2023-04")]
+        # Forward (north): one candidate then exhausted.
+        fwd1 = [Panorama(pano_id="fwd1", lat=0.001, lon=0.0, heading=0.0, date="2023-04")]
+        fwd_end: list[Panorama] = []
+        # Backward (south): two candidates then exhausted.
+        bwd1 = [Panorama(pano_id="bwd1", lat=-0.001, lon=0.0, heading=180.0, date="2023-04")]
+        bwd2 = [Panorama(pano_id="bwd2", lat=-0.002, lon=0.0, heading=180.0, date="2023-04")]
+        bwd_end: list[Panorama] = []
+
+        responses = [seed, fwd1, fwd_end, bwd1, bwd2, bwd_end]
+        search_calls: list[Tuple[float, float]] = []
+
+        def fake_search(lat, lon):
+            search_calls.append((lat, lon))
+            idx = len(search_calls) - 1
+            return responses[idx] if idx < len(responses) else []
+
+        monkeypatch.setattr(main, "search_panoramas", fake_search)
+        monkeypatch.setattr(main, "get_panorama", lambda **_kwargs: DummyImage())
+
+        added = main.fetch_random_sequence_panoramas(
+            target_new=10,
+            max_searches=1,
+            walk_enabled=True,
+            walk_bidirectional=True,
+            max_sequence_length=12,
+            step_meters=8.0,
+        )
+
+        assert added == 4  # anchor + fwd1 + bwd1 + bwd2
+        rows = list(main.csv.DictReader(info_file.open(encoding="utf-8")))
+        assert [row["pano_id"] for row in rows] == ["anchor", "fwd1", "bwd1", "bwd2"]
+        assert {row["sequence_id"] for row in rows} == {"anchor"}
+        # First walk goes north (positive lat), backward walk goes south (negative lat).
+        fwd_step = search_calls[1]
+        bwd_step = search_calls[3]
+        assert fwd_step[0] > 0, search_calls
+        assert bwd_step[0] < 0, search_calls
+
+    def test_fetch_random_sequence_bidirectional_respects_sequence_max_length(self, tmp_path, monkeypatch):
+        """Forward+backward share one length budget; backward gets the remainder."""
+        pano_dir = tmp_path / "images" / "pano"
+        pano_dir.mkdir(parents=True)
+        info_file = pano_dir / "info.csv"
+        info_file.write_text(",".join(main.FIELDNAMES) + "\n", encoding="utf-8")
+
+        monkeypatch.setattr(main, "panoPath", pano_dir)
+        monkeypatch.setattr(main, "infoPath", info_file)
+        monkeypatch.setattr(main, "get_session", lambda: object())
+        monkeypatch.setattr(main.time, "sleep", lambda _delay: None)
+        monkeypatch.setattr(main.random, "uniform", lambda _a, _b: 0.0)
+        monkeypatch.setattr(main, "random_location", lambda: (0.0, 0.0))
+        monkeypatch.setattr(main, "SKIP_LOW_PANO_SEARCH", False)
+
+        seed = [Panorama(pano_id="anchor", lat=0.0, lon=0.0, heading=0.0, date="2023-04")]
+        # Forward walk could go on forever — sequence_max_length must cap it.
+        many = [
+            [Panorama(pano_id=f"fwd{i}", lat=0.001 * (i + 1), lon=0.0, heading=0.0, date="2023-04")]
+            for i in range(20)
+        ]
+        responses = [seed] + many
+        search_calls: list[Tuple[float, float]] = []
+
+        def fake_search(lat, lon):
+            search_calls.append((lat, lon))
+            idx = len(search_calls) - 1
+            return responses[idx] if idx < len(responses) else []
+
+        monkeypatch.setattr(main, "search_panoramas", fake_search)
+        monkeypatch.setattr(main, "get_panorama", lambda **_kwargs: DummyImage())
+
+        added = main.fetch_random_sequence_panoramas(
+            target_new=100,
+            max_searches=1,
+            walk_enabled=True,
+            walk_bidirectional=True,
+            max_sequence_length=4,  # anchor + 3 walked panos total
+            step_meters=8.0,
+        )
+
+        # 1 cluster pano (anchor) + at most (4 - 1) = 3 walked.
+        assert added == 4
+        rows = list(main.csv.DictReader(info_file.open(encoding="utf-8")))
+        assert len(rows) == 4
+
+    def test_fetch_random_sequence_skips_walk_when_disabled(self, tmp_path, monkeypatch):
+        pano_dir = tmp_path / "images" / "pano"
+        pano_dir.mkdir(parents=True)
+        info_file = pano_dir / "info.csv"
+        info_file.write_text(",".join(main.FIELDNAMES) + "\n", encoding="utf-8")
+
+        monkeypatch.setattr(main, "panoPath", pano_dir)
+        monkeypatch.setattr(main, "infoPath", info_file)
+        monkeypatch.setattr(main, "get_session", lambda: object())
+        monkeypatch.setattr(main.time, "sleep", lambda _delay: None)
+        monkeypatch.setattr(main.random, "uniform", lambda _a, _b: 0.0)
+        monkeypatch.setattr(main, "random_location", lambda: (0.0, 0.0))
+        monkeypatch.setattr(main, "SKIP_LOW_PANO_SEARCH", False)
+
+        search_calls: list[Tuple[float, float]] = []
+
+        def fake_search(lat, lon):
+            search_calls.append((lat, lon))
+            return [
+                Panorama(pano_id="anchor", lat=0.0, lon=0.0, heading=0.0, date="2023-04"),
+            ]
+
+        monkeypatch.setattr(main, "search_panoramas", fake_search)
+        monkeypatch.setattr(main, "get_panorama", lambda **_kwargs: DummyImage())
+
+        added = main.fetch_random_sequence_panoramas(
+            target_new=10, max_searches=1, walk_enabled=False,
+        )
+
+        assert added == 1
+        assert search_calls == [(0.0, 0.0)]
+
+    def test_fetch_random_sequence_raises_quota_during_walk(self, tmp_path, monkeypatch):
+        pano_dir = tmp_path / "images" / "pano"
+        pano_dir.mkdir(parents=True)
+        info_file = pano_dir / "info.csv"
+        info_file.write_text(",".join(main.FIELDNAMES) + "\n", encoding="utf-8")
+
+        monkeypatch.setattr(main, "panoPath", pano_dir)
+        monkeypatch.setattr(main, "infoPath", info_file)
+        monkeypatch.setattr(main, "get_session", lambda: object())
+        monkeypatch.setattr(main.time, "sleep", lambda _delay: None)
+        monkeypatch.setattr(main.random, "uniform", lambda _a, _b: 0.0)
+        monkeypatch.setattr(main, "random_location", lambda: (0.0, 0.0))
+        monkeypatch.setattr(main, "SKIP_LOW_PANO_SEARCH", False)
+
+        seed = [Panorama(pano_id="anchor", lat=0.0, lon=0.0, heading=0.0, date="2023-04")]
+        call_count = {"n": 0}
+
+        def fake_search(lat, lon):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return seed
+            raise PanoramaSearchError("limit reached") from GoogleAPIQuotaExceededError("limit")
+
+        monkeypatch.setattr(main, "search_panoramas", fake_search)
+        monkeypatch.setattr(main, "get_panorama", lambda **_kwargs: DummyImage())
+
+        added = main.fetch_random_sequence_panoramas(
+            target_new=10, max_searches=5, walk_enabled=True, max_sequence_length=12,
+        )
+
+        # Anchor still recorded; walk bailed out on quota → returns gracefully.
+        assert added == 1
+        rows = list(main.csv.DictReader(info_file.open(encoding="utf-8")))
+        assert [row["pano_id"] for row in rows] == ["anchor"]
+
+    def test_main_dispatches_to_random_search_sequence(self, monkeypatch):
+        calls: list[str] = []
+        monkeypatch.setattr(main, "CRAWL_MODE", "random_search_sequence")
+        monkeypatch.setattr(main, "init_info", lambda: calls.append("init"))
+        monkeypatch.setattr(main, "fetch_random_sequence_panoramas", lambda: calls.append("sequence"))
+        monkeypatch.setattr(main, "fetch_random_incremental_panoramas", lambda: calls.append("random"))
+
+        assert main.main() == 0
+        assert calls == ["init", "sequence"]
+
+
+class TestMetadataCache:
+    """Cached panorama metadata avoids re-hitting the live API."""
+
+    def test_cache_miss_calls_api_reserves_quota_and_persists(self, tmp_path, monkeypatch):
+        from panorama import meta_cache as meta_cache_module
+        from panorama.api import MetaData
+
+        cache_path = tmp_path / "pano_meta.json"
+        meta = MetaData(pano_id="abc", date="2023-04", location={"lat": 1.0, "lng": 2.0})
+
+        api_calls: list[str] = []
+
+        def fake_get_panorama_meta(pano_id, api_key):
+            api_calls.append(pano_id)
+            assert api_key == "key"
+            return meta
+
+        reservations: list[str] = []
+
+        def fake_reserve(category):
+            reservations.append(category)
+
+        monkeypatch.setattr(meta_cache_module, "get_panorama_meta", fake_get_panorama_meta)
+        monkeypatch.setattr(meta_cache_module, "reserve_request", fake_reserve)
+
+        result = meta_cache_module.cached_get_panorama_meta(
+            "abc", "key", cache_path=cache_path, ttl_seconds=60, now=1000,
+        )
+
+        assert result.pano_id == "abc"
+        assert result.location.lat == 1.0
+        assert api_calls == ["abc"]
+        assert reservations == ["metadata_requests"]
+        assert json.loads(cache_path.read_text(encoding="utf-8"))["abc"]["cached_at"] == 1000
+
+    def test_cache_hit_skips_api_and_quota(self, tmp_path, monkeypatch):
+        from panorama import meta_cache as meta_cache_module
+
+        cache_path = tmp_path / "pano_meta.json"
+        cache_path.write_text(
+            json.dumps(
+                {
+                    "abc": {
+                        "pano_id": "abc",
+                        "date": "2023-04",
+                        "lat": 1.0,
+                        "lng": 2.0,
+                        "cached_at": 950,
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        def fail_api(*_args, **_kwargs):
+            raise AssertionError("API must not be called on cache hit")
+
+        def fail_reserve(*_args, **_kwargs):
+            raise AssertionError("quota must not be reserved on cache hit")
+
+        monkeypatch.setattr(meta_cache_module, "get_panorama_meta", fail_api)
+        monkeypatch.setattr(meta_cache_module, "reserve_request", fail_reserve)
+
+        meta = meta_cache_module.cached_get_panorama_meta(
+            "abc", "key", cache_path=cache_path, ttl_seconds=120, now=1000,
+        )
+
+        assert meta.date == "2023-04"
+        assert meta.location.lat == 1.0
+
+    def test_expired_cache_entry_triggers_refetch(self, tmp_path, monkeypatch):
+        from panorama import meta_cache as meta_cache_module
+        from panorama.api import MetaData
+
+        cache_path = tmp_path / "pano_meta.json"
+        cache_path.write_text(
+            json.dumps(
+                {
+                    "abc": {
+                        "pano_id": "abc",
+                        "date": "2010-01",
+                        "lat": 0.0,
+                        "lng": 0.0,
+                        "cached_at": 100,
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        api_calls: list[str] = []
+
+        def fake_get_panorama_meta(pano_id, api_key):
+            api_calls.append(pano_id)
+            return MetaData(pano_id=pano_id, date="2023-04", location={"lat": 9.0, "lng": 8.0})
+
+        monkeypatch.setattr(meta_cache_module, "get_panorama_meta", fake_get_panorama_meta)
+        monkeypatch.setattr(meta_cache_module, "reserve_request", lambda category: None)
+
+        meta = meta_cache_module.cached_get_panorama_meta(
+            "abc", "key", cache_path=cache_path, ttl_seconds=60, now=1000,
+        )
+
+        assert api_calls == ["abc"]
+        assert meta.date == "2023-04"
+        assert meta.location.lat == 9.0
+
+    def test_quota_exhaustion_raises_without_persisting(self, tmp_path, monkeypatch):
+        from panorama import meta_cache as meta_cache_module
+
+        cache_path = tmp_path / "pano_meta.json"
+
+        def fail_api(*_args, **_kwargs):
+            raise AssertionError("API must not be called when quota raises first")
+
+        def reserve_fails(category):
+            raise GoogleAPIQuotaExceededError("limit reached")
+
+        monkeypatch.setattr(meta_cache_module, "get_panorama_meta", fail_api)
+        monkeypatch.setattr(meta_cache_module, "reserve_request", reserve_fails)
+
+        with pytest.raises(GoogleAPIQuotaExceededError):
+            meta_cache_module.cached_get_panorama_meta(
+                "abc", "key", cache_path=cache_path, ttl_seconds=60, now=1000,
+            )
+
+        assert not cache_path.exists()
+
+
+class TestSequenceAudit:
+    """`integration/sequence_audit.py` groups + scores sequences offline."""
+
+    def _make_info_csv(self, tmp_path: Path, rows: list[dict[str, str]]) -> Path:
+        info_file = tmp_path / "info.csv"
+        with open(info_file, "w", encoding="utf-8") as f:
+            writer = main.csv.DictWriter(f, fieldnames=main.FIELDNAMES)
+            writer.writeheader()
+            for row in rows:
+                full = {name: "" for name in main.FIELDNAMES}
+                full.update(row)
+                writer.writerow(full)
+        return info_file
+
+    def test_audit_groups_by_sequence_id_and_marks_contiguous(self, tmp_path):
+        info_file = self._make_info_csv(
+            tmp_path,
+            [
+                # 8m apart north — well under default 30m gap threshold.
+                {"pano_id": "a", "lat": "0.0", "lon": "0.0", "heading": "0.0", "date": "2023-04", "timestamp": "2023-04", "sequence_id": "a"},
+                {"pano_id": "b", "lat": "0.0000719", "lon": "0.0", "heading": "0.0", "date": "2023-04", "timestamp": "2023-04", "sequence_id": "a"},
+                {"pano_id": "c", "lat": "0.0001438", "lon": "0.0", "heading": "0.0", "date": "2023-04", "timestamp": "2023-04", "sequence_id": "a"},
+            ],
+        )
+        report = sequence_audit.run_audit(info_file)
+        assert report["totals"]["sequences"] == 1
+        assert report["totals"]["contiguous_sequences"] == 1
+        assert report["totals"]["panoramas_in_sequences"] == 3
+        assert report["totals"]["panoramas_unknown"] == 0
+        seq = report["sequences"][0]
+        assert seq["length"] == 3
+        assert seq["gap_count"] == 0
+        assert seq["is_contiguous"] is True
+        # ~8m per step within haversine rounding.
+        assert 7.5 <= seq["mean_step_m"] <= 8.5
+        assert seq["pano_ids"] == ["a", "b", "c"]
+
+    def test_audit_flags_gaps_above_threshold(self, tmp_path):
+        info_file = self._make_info_csv(
+            tmp_path,
+            [
+                {"pano_id": "a", "lat": "0.0", "lon": "0.0", "heading": "0.0", "date": "2023-04", "timestamp": "2023-04", "sequence_id": "seq1"},
+                # 8m
+                {"pano_id": "b", "lat": "0.0000719", "lon": "0.0", "heading": "0.0", "date": "2023-04", "timestamp": "2023-04", "sequence_id": "seq1"},
+                # >100m jump (~111m at equator for 0.001 deg of latitude)
+                {"pano_id": "c", "lat": "0.001", "lon": "0.0", "heading": "0.0", "date": "2023-04", "timestamp": "2023-04", "sequence_id": "seq1"},
+            ],
+        )
+        report = sequence_audit.run_audit(info_file, gap_threshold_m=30.0)
+        seq = report["sequences"][0]
+        assert seq["gap_count"] == 1
+        assert seq["is_contiguous"] is False
+        assert seq["max_step_m"] > 100
+        assert report["totals"]["gapped_sequences"] == 1
+
+    def test_audit_counts_unknown_sequence_separately(self, tmp_path):
+        info_file = self._make_info_csv(
+            tmp_path,
+            [
+                {"pano_id": "legacy1", "lat": "0.0", "lon": "0.0", "heading": "0.0", "date": "2020-01", "timestamp": "", "sequence_id": "unknown"},
+                {"pano_id": "legacy2", "lat": "1.0", "lon": "1.0", "heading": "0.0", "date": "2020-01", "timestamp": "", "sequence_id": "unknown"},
+                {"pano_id": "real", "lat": "5.0", "lon": "5.0", "heading": "0.0", "date": "2023-04", "timestamp": "2023-04", "sequence_id": "real"},
+            ],
+        )
+        report = sequence_audit.run_audit(info_file)
+        assert report["totals"]["sequences"] == 1  # only "real" is a real sequence
+        assert report["totals"]["panoramas_in_sequences"] == 1
+        assert report["totals"]["panoramas_unknown"] == 2
+        assert {s["sequence_id"] for s in report["sequences"]} == {"real"}
+        assert report["totals"]["singleton_sequences"] == 1
+
+    def test_audit_text_report_lists_each_sequence(self, tmp_path):
+        info_file = self._make_info_csv(
+            tmp_path,
+            [
+                {"pano_id": "a", "lat": "0.0", "lon": "0.0", "heading": "0.0", "date": "2023-04", "timestamp": "2023-04", "sequence_id": "seqA"},
+                {"pano_id": "b", "lat": "0.0000719", "lon": "0.0", "heading": "0.0", "date": "2023-04", "timestamp": "2023-04", "sequence_id": "seqA"},
+            ],
+        )
+        report = sequence_audit.run_audit(info_file)
+        text = sequence_audit.format_text_report(report)
+        assert "seqA" in text
+        assert "Gap threshold" in text
+        assert "Total sequences" in text
+
+    def test_audit_main_returns_zero_on_success(self, tmp_path, capsys):
+        info_file = self._make_info_csv(
+            tmp_path,
+            [
+                {"pano_id": "a", "lat": "0.0", "lon": "0.0", "heading": "0.0", "date": "2023-04", "timestamp": "2023-04", "sequence_id": "seq"},
+            ],
+        )
+        rc = sequence_audit.main(["--input", str(info_file), "--json"])
+        assert rc == 0
+        captured = capsys.readouterr()
+        payload = json.loads(captured.out)
+        assert payload["totals"]["sequences"] == 1
+
+    def test_audit_main_returns_error_when_missing(self, tmp_path, capsys):
+        rc = sequence_audit.main(["--input", str(tmp_path / "does_not_exist.csv")])
+        assert rc == 1
+        captured = capsys.readouterr()
+        assert "not found" in captured.err
 
 
 class TestProcessData:
@@ -1013,6 +1915,129 @@ class TestProcessData:
         assert count == 2
         assert (input_dir / "int00000.png").read_bytes() == b"a"
         assert (output_dir / "out00000.png").read_bytes() == b"b"
+
+
+class TestSameSequencePairSelector:
+    """Sequence-aware training pair selection."""
+
+    def _record(self, pano_id: str, lat: float, lon: float, sequence_id: str = "seqA") -> "training_pairs_module.PanoramaRecord":
+        return training_pairs_module.PanoramaRecord(
+            pano_id=pano_id, lat=lat, lon=lon, sequence_id=sequence_id,
+        )
+
+    def test_same_sequence_yields_only_intra_group_pairs(self):
+        records = [
+            self._record("a1", 0.0, 0.0, sequence_id="seqA"),
+            self._record("a2", 0.0, 0.0001, sequence_id="seqA"),
+            self._record("b1", 10.0, 10.0, sequence_id="seqB"),
+            self._record("b2", 10.0, 10.0001, sequence_id="seqB"),
+            self._record("legacy", 5.0, 5.0, sequence_id="unknown"),
+        ]
+        selector = training_pairs_module.SameSequencePairSelector()
+        pairs = list(selector.select(records))
+
+        ids = {(p[0].pano_id, p[1].pano_id) for p in pairs}
+        # No cross-sequence pairs (a*-b*) and no legacy pairs anywhere.
+        assert ("a1", "a2") in ids
+        assert ("b1", "b2") in ids
+        assert not any({"a1", "a2"} & {p[0].pano_id, p[1].pano_id} == {p[0].pano_id, p[1].pano_id}
+                       and {p[0].pano_id, p[1].pano_id} & {"b1", "b2"} for p in pairs)
+        assert not any("legacy" in (a.pano_id, b.pano_id) for a, b in pairs)
+
+    def test_same_sequence_skips_singletons(self):
+        records = [
+            self._record("solo", 0.0, 0.0, sequence_id="lonely"),
+            self._record("a1", 1.0, 1.0, sequence_id="seqA"),
+            self._record("a2", 1.0, 1.0001, sequence_id="seqA"),
+        ]
+        selector = training_pairs_module.SameSequencePairSelector()
+        pairs = list(selector.select(records))
+
+        assert len(pairs) == 1
+        assert {pairs[0][0].pano_id, pairs[0][1].pano_id} == {"a1", "a2"}
+
+    def test_same_sequence_with_distance_filter_drops_far_pairs(self):
+        records = [
+            self._record("near1", 0.0, 0.0, sequence_id="seqA"),
+            self._record("near2", 0.0, 1e-6, sequence_id="seqA"),
+            self._record("far", 10.0, 10.0, sequence_id="seqA"),
+        ]
+        metric = training_pairs_module.SquaredDegreeDistance(1e-8)
+        selector = training_pairs_module.SameSequencePairSelector(distance_metric=metric)
+        pairs = list(selector.select(records))
+
+        assert len(pairs) == 1
+        assert {pairs[0][0].pano_id, pairs[0][1].pano_id} == {"near1", "near2"}
+
+    def test_make_pair_selector_dispatches_modes(self):
+        metric = training_pairs_module.SquaredDegreeDistance(1.0)
+
+        all_within = training_pairs_module.make_pair_selector("all_within_distance", metric)
+        same_seq = training_pairs_module.make_pair_selector("same_sequence", metric)
+        same_seq_dist = training_pairs_module.make_pair_selector("same_sequence_and_distance", metric)
+
+        assert isinstance(all_within, training_pairs_module.AllPairsWithinDistance)
+        assert isinstance(same_seq, training_pairs_module.SameSequencePairSelector)
+        assert same_seq.distance_metric is None
+        assert isinstance(same_seq_dist, training_pairs_module.SameSequencePairSelector)
+        assert same_seq_dist.distance_metric is metric
+
+    def test_make_pair_selector_rejects_unknown_mode(self):
+        metric = training_pairs_module.SquaredDegreeDistance(1.0)
+        with pytest.raises(ValueError, match="Unknown pair_selector_mode"):
+            training_pairs_module.make_pair_selector("bogus", metric)
+
+    def test_load_records_round_trips_sequence_id(self, tmp_path):
+        metadata_path = tmp_path / "info.csv"
+        metadata_path.write_text(
+            "pano_id,lat,lon,heading,pitch,roll,date,search_point,timestamp,sequence_id\n"
+            "a,1.0,2.0,90.0,0.0,0.0,2023-04,,2023-04,anchor\n"
+            "legacy,3.0,4.0,90.0,0.0,0.0,2020-01,,,\n",
+            encoding="utf-8",
+        )
+        records = training_pairs_module.load_records(metadata_path)
+        by_id = {r.pano_id: r for r in records}
+        assert by_id["a"].sequence_id == "anchor"
+        assert by_id["a"].timestamp == "2023-04"
+        assert by_id["legacy"].sequence_id == training_pairs_module.LEGACY_SEQUENCE_ID
+        assert by_id["legacy"].timestamp is None
+
+    def test_build_training_pairs_honors_pair_selector_mode_config(self, tmp_path, monkeypatch):
+        """Config dispatch: same_sequence mode skips cross-sequence pairs end-to-end."""
+        source_dir = tmp_path / "images" / "pano"
+        input_dir = tmp_path / "temp" / "train_A"
+        output_dir = tmp_path / "temp" / "train_B"
+        label_dir = tmp_path / "temp" / "train_cond"
+        source_dir.mkdir(parents=True)
+        for name in ("a1", "a2", "b1"):
+            (source_dir / f"{name}.png").write_bytes(name.encode())
+        metadata_path = source_dir / "info.csv"
+        metadata_path.write_text(
+            "pano_id,lat,lon,heading,pitch,roll,date,search_point,timestamp,sequence_id\n"
+            "a1,1.0,2.0,90.0,0.0,0.0,2023-04,,2023-04,seqA\n"
+            "a2,1.0,2.0,90.0,0.0,0.0,2023-04,,2023-04,seqA\n"
+            "b1,1.0,2.0,90.0,0.0,0.0,2020-01,,,unknown\n",
+            encoding="utf-8",
+        )
+
+        # Force config to same_sequence; legacy/unknown rows must not pair.
+        monkeypatch.setitem(training_pairs_module._cfg, "pair_selector_mode", "same_sequence")
+        writer = training_pairs_module.CopyBidirectionalSampleWriter(
+            source_dir=source_dir,
+            input_dir=input_dir,
+            output_dir=output_dir,
+            label_dir=label_dir,
+            prefix_int="int",
+            prefix_out="out",
+            prefix_ins="ins",
+        )
+
+        count = training_pairs_module.build_training_pairs(metadata_path, sample_writer=writer)
+
+        # Only one sequence pair (a1, a2) → 2 samples (A→B and B→A).
+        assert count == 2
+        written = sorted(p.name for p in input_dir.iterdir())
+        assert written == ["int00000.png", "int00001.png"]
 
 
 class TestQualityDatasetBuilder:

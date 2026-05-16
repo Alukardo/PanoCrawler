@@ -8,9 +8,26 @@ min_delay: 3.0
 max_delay: 8.0
 output_size: [1024, 512]
 date_threshold: "2017-09"
-crawl_mode: "random_incremental"
+# crawl_mode: "fixed" | "random_incremental" | "random_search_sequence"
+crawl_mode: "random_search_sequence"
 random_crawl_target_new: 200
 random_crawl_max_searches: 2000
+
+# 搜索结果过少时跳过该搜索点（数量 < min_panos_per_search）
+skip_low_pano_search: true
+min_panos_per_search: 2
+
+# ── Sequence-Aware 爬取 (random_search_sequence) ────
+# 在每个搜索点按 date(YYYY-MM) 分组，仅保留同 session 的最大组，
+# 跨年份重复（2010/2015/2019/...）不再下载；
+# walk 模式额外沿 anchor heading 步进重新搜索，把同 date 的相邻全景并入同 sequence。
+sequence_crawl_target_new: 200
+sequence_crawl_max_searches: 2000
+sequence_walk_enabled: true
+# 双向 walk：从 anchor 朝前 / 朝后各走一次，序列长度上限按 sequence_max_length 共享。
+sequence_walk_bidirectional: true
+sequence_max_length: 12
+sequence_step_meters: 8.0
 
 # ── Maps Tile API ────────────────────────────────────
 # api_key should be configured via environment variable GOOGLE_API_KEY
@@ -26,10 +43,16 @@ prefix_ins: "ins"
 black_threshold: 15
 bottom_black_edge_ratio: 0.05
 horizontal_redundancy_mad_threshold: 5.0
-process_on_download: false
+
+# ── 训练对配对 ──────────────────────────────────────
+# all_within_distance        — 历史默认：仅按距离阈值配对
+# same_sequence              — 仅在同一 sequence_id 内全两两配对（跨视角同 session）
+# same_sequence_and_distance — 同 sequence_id 且通过距离阈值（最严格）
+pair_selector_mode: "all_within_distance"
 
 # ── CSV 字段 ─────────────────────────────────────────
-fieldnames: ["pano_id", "lat", "lon", "heading", "pitch", "roll", "date", "search_point"]
+# 旧文件缺少 timestamp / sequence_id 时会在加载时自动补 ""/"unknown"
+fieldnames: ["pano_id", "lat", "lon", "heading", "pitch", "roll", "date", "search_point", "timestamp", "sequence_id"]
 
 # ── Tile 下载 ─────────────────────────────────────────
 tile_timeout: 20
@@ -39,6 +62,10 @@ google_api_quota_tracking_enabled: true
 google_api_daily_quota: 15000
 google_api_daily_soft_limit: 13500
 google_api_usage_path: "runtime/google_api_usage.json"
+
+# Metadata API 调用也计入每日配额，并写入下方 JSON 缓存（30 天默认 TTL）
+metadata_cache_path: "runtime/pano_meta_cache.json"
+metadata_cache_ttl_seconds: 2592000
 
 # ── 路径配置 ─────────────────────────────────────────
 images_root: "/Users/alukardo/Documents/NTUST/研究資料/Researchs/[2026] NeRF/images"
