@@ -1173,6 +1173,9 @@ class TestSequenceCrawl:
 
         monkeypatch.setattr(main, "search_panoramas", fake_search)
         monkeypatch.setattr(main, "download_missing_panorama", fake_download)
+        # Prevent _walk_sequence's persistence call from clobbering the real
+        # info.csv when download is faked to succeed.
+        monkeypatch.setattr(main, "write_info_records", lambda _records: None)
         monkeypatch.setattr(main.time, "sleep", lambda _s: None)
 
         anchor = Panorama(pano_id="anchor", lat=0.0, lon=0.0, heading=0.0, date=None)
